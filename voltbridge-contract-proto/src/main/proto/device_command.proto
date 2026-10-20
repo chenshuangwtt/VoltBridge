@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package voltbridge.contract.v1;
+
+option java_multiple_files = true;
+option java_package = "com.voltbridge.contract.v1";
+
+import "common.proto";
+
+message StartChargingCommandPayload {
+  string connector_no = 1;
+  string limit_amount = 2;
+  string logical_card_no = 3;
+  string physical_card_no = 4;
+  string business_ref = 5;
+}
+
+message StopChargingCommandPayload {
+  ConnectorRef connector = 1;
+  string transaction_id = 2;
+  string protocol_transaction_id = 3;
+}
+
+message SynchronizeTimeCommandPayload {
+  int64 target_time_epoch_millis = 1;
+}
+
+message ResetDeviceCommandPayload {
+  bool when_idle = 1;
+}
+
+message DeviceCommandEnvelope {
+  MessageMetadata metadata = 1;
+  string device_id = 2;
+  string command_id = 3;
+
+  oneof command {
+    StartChargingCommandPayload start_charging = 10;
+    StopChargingCommandPayload stop_charging = 11;
+    SynchronizeTimeCommandPayload synchronize_time = 12;
+    ResetDeviceCommandPayload reset_device = 13;
+  }
+}

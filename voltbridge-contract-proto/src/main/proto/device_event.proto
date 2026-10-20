@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package voltbridge.contract.v1;
+
+option java_multiple_files = true;
+option java_package = "com.voltbridge.contract.v1";
+
+import "common.proto";
+
+message DeviceConnectedEventPayload {
+  string protocol = 1;
+  string protocol_version = 2;
+  string session_id = 3;
+  string remote_address = 4;
+}
+
+message DeviceDisconnectedEventPayload {
+  string reason = 1;
+  string protocol = 2;
+  string session_id = 3;
+}
+
+message HeartbeatEventPayload {
+  string session_id = 1;
+  int64 device_timestamp_epoch_millis = 2;
+}
+
+message ConnectorStatusEventPayload {
+  ConnectorRef connector = 1;
+  string status = 2;
+}
+
+message ChargingProgressEventPayload {
+  ConnectorRef connector = 1;
+  string transaction_id = 2;
+  string output_voltage = 3;
+  string output_current = 4;
+  string output_power_kw = 5;
+  optional int32 state_of_charge = 6;
+  string energy_kwh = 7;
+  int64 charging_duration_millis = 8;
+  string charging_amount = 9;
+  string additional_info = 10;
+  string protocol = 11;
+}
+
+message ChargingEndedEventPayload {
+  ConnectorRef connector = 1;
+  string protocol_transaction_id = 2;
+  optional int32 end_soc = 3;
+  string output_energy_kwh = 4;
+  int64 charging_duration_millis = 5;
+  string additional_info = 6;
+  optional int32 minimum_cell_voltage = 7;
+  optional int32 maximum_cell_voltage = 8;
+  optional int32 minimum_temperature = 9;
+  optional int32 maximum_temperature = 10;
+  string charger_code = 11;
+  string protocol = 12;
+}
+
+message TransactionRecordEventPayload {
+  ConnectorRef connector = 1;
+  string protocol_transaction_id = 2;
+  int64 started_at_epoch_millis = 3;
+  int64 ended_at_epoch_millis = 4;
+  string start_meter_kwh = 5;
+  string end_meter_kwh = 6;
+  string total_energy_kwh = 7;
+  string total_amount = 8;
+  string start_method = 9;
+  string stop_category = 10;
+  int32 raw_stop_code = 11;
+  string raw_stop_detail = 12;
+  string additional_info = 13;
+  string vehicle_vin = 14;
+  int64 transaction_time_epoch_millis = 15;
+  string raw_record = 16;
+  repeated EnergyBreakdownItemPayload energy_breakdown = 17;
+  string protocol = 18;
+}
+
+message EnergyBreakdownItemPayload {
+  string category = 1;
+  string energy_kwh = 2;
+  string amount = 3;
+  string unit_price = 4;
+}
+
+message CommandResultEventPayload {
+  string command_id = 1;
+  string correlation_id = 2;
+  string protocol_transaction_id = 3;
+  string connector_no = 4;
+  string command_type = 5;
+  string status = 6;
+  FailureDetail failure = 7;
+  optional int32 raw_result_code = 8;
+  optional int32 raw_failure_code = 9;
+  bool duplicate = 10;
+}
+
+message DeviceDiagnosticEventPayload {
+  string connector_no = 1;
+  string severity = 2;
+  string category = 3;
+  string code = 4;
+  string description = 5;
+  string protocol_transaction_id = 6;
+  string protocol_detail = 7;
+}
+
+message DeviceEventEnvelope {
+  MessageMetadata metadata = 1;
+  string device_id = 2;
+  GatewayRoute source_route = 3;
+  string event_id = 4;
+
+  oneof event {
+    DeviceConnectedEventPayload connected = 10;
+    DeviceDisconnectedEventPayload disconnected = 11;
+    HeartbeatEventPayload heartbeat = 12;
+    ConnectorStatusEventPayload connector_status = 13;
+    ChargingProgressEventPayload charging_progress = 14;
+    ChargingEndedEventPayload charging_ended = 15;
+    TransactionRecordEventPayload transaction_record = 16;
+    CommandResultEventPayload command_result = 17;
+    DeviceDiagnosticEventPayload diagnostic = 18;
+  }
+}

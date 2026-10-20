@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: voltbridge-business
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: ${REDIS_TIMEOUT:2s}
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/voltbridge}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:voltbridge}
+    driver-class-name: org.postgresql.Driver
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema-init.sql
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:voltbridge-business}
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+    listener:
+      ack-mode: record
+server:
+  port: ${HTTP_PORT:8080}
+voltbridge:
+  deployment:
+    mode: business
+  routing:
+    mode: ${ROUTING_MODE:redis}
+  messaging:
+    kafka:
+      consumer-enabled: true
+      publisher-enabled: false
+      device-events-topic: ${DEVICE_EVENTS_TOPIC:voltbridge.device.events}
+      consumer-group: ${KAFKA_CONSUMER_GROUP:voltbridge-business}
+  grpc:
+    server-enabled: true
+    server-port: ${BUSINESS_GRPC_PORT:9091}
+    gateway-target: ${GATEWAY_GRPC_TARGET:localhost:9090}
+    command-timeout: ${GATEWAY_COMMAND_TIMEOUT:3s}
+mybatis-plus:
+  type-handlers-package: com.voltbridge.infra.persistence.typehandler
+  configuration:
+    map-underscore-to-camel-case: true
+management:
+  endpoints.web.exposure.include: health,info,prometheus,metrics

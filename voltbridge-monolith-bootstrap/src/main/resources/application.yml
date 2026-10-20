@@ -1,0 +1,87 @@
+spring:
+  application:
+    name: voltbridge
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+  # 以下为本地开发默认值，生产环境必须通过环境变量覆盖。
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/voltbridge}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:voltbridge}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+  # 第一阶段启动时执行幂等 schema；后续版本可迁移到 Flyway。
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema-init.sql
+  jackson:
+    default-property-inclusion: non_null
+
+mybatis-plus:
+  type-handlers-package: com.voltbridge.infra.persistence.typehandler
+  configuration:
+    map-underscore-to-camel-case: true
+
+server:
+  port: ${HTTP_PORT:8080}
+
+voltbridge:
+  routing:
+    mode: local
+  device:
+    session:
+      idle-timeout: ${DEVICE_SESSION_IDLE_TIMEOUT:120s}
+    command:
+      remote-start-timeout: ${REMOTE_START_TIMEOUT:30s}
+      remote-stop-timeout: ${REMOTE_STOP_TIMEOUT:30s}
+      timeout-scan-interval: ${COMMAND_TIMEOUT_SCAN_INTERVAL:1s}
+  protocol:
+    yunkuaichong:
+      pending-command-retention: ${YKC_PENDING_COMMAND_RETENTION:10m}
+      time-zone: ${YKC_TIME_ZONE:Asia/Shanghai}
+    ocpp16:
+      enabled: ${OCPP16_ENABLED:true}
+      heartbeat-interval: ${OCPP16_HEARTBEAT_INTERVAL:60s}
+      request-timeout: ${OCPP16_REQUEST_TIMEOUT:30s}
+  gateway:
+    node-id: ${GATEWAY_NODE_ID:monolith}
+    route-lease: ${GATEWAY_ROUTE_LEASE:PT10M}
+  transport:
+    # TCP 层只管理连接和按端点配置拆分的帧，不解释登录、心跳等业务语义。
+    tcp:
+      endpoint-id: ${TCP_ENDPOINT_ID:yunkuaichong-v150-tcp}
+      host: ${TCP_HOST:0.0.0.0}
+      port: ${TCP_PORT:9000}
+      max-connections: ${TCP_MAX_CONNECTIONS:10000}
+      reader-idle-timeout: ${TCP_READER_IDLE_TIMEOUT:${voltbridge.device.session.idle-timeout}}
+      framing:
+        byte-order: ${TCP_FRAME_BYTE_ORDER:LITTLE_ENDIAN}
+        max-frame-length: ${TCP_MAX_FRAME_LENGTH:8192}
+        length-field-offset: ${TCP_LENGTH_FIELD_OFFSET:1}
+        length-field-length: ${TCP_LENGTH_FIELD_LENGTH:1}
+        length-adjustment: ${TCP_LENGTH_ADJUSTMENT:2}
+        initial-bytes-to-strip: ${TCP_INITIAL_BYTES_TO_STRIP:0}
+        fail-fast: ${TCP_FRAME_FAIL_FAST:true}
+    websocket:
+      enabled: ${OCPP_WEBSOCKET_ENABLED:true}
+      endpoint-id: ${OCPP_WEBSOCKET_ENDPOINT_ID:ocpp16-websocket}
+      host: ${OCPP_WEBSOCKET_HOST:0.0.0.0}
+      port: ${OCPP_WEBSOCKET_PORT:9100}
+      path: ${OCPP_WEBSOCKET_PATH:/ocpp}
+      max-content-length: ${OCPP_WEBSOCKET_MAX_CONTENT_LENGTH:1048576}
+      idle-timeout: ${OCPP_WEBSOCKET_IDLE_TIMEOUT:5m}
+
+management:
+  # 仅暴露第一阶段运维所需的健康、指标和 Prometheus 端点。
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when-authorized

@@ -1,0 +1,10 @@
+target/
+.idea/
+.vscode/
+*.iml
+*.log
+.env
+*.hprof
+*.dump
+*.pid
+.DS_Store

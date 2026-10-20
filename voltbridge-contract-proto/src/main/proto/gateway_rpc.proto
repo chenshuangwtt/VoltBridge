@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package voltbridge.contract.v1;
+
+option java_multiple_files = true;
+option java_package = "com.voltbridge.contract.v1";
+
+import "device_command.proto";
+import "device_event.proto";
+import "common.proto";
+
+service GatewayRpcService {
+  rpc DispatchCommand(DispatchCommandRequest) returns (DispatchCommandReply);
+}
+
+// 设备登录或 BootNotification 需要在网关回包前取得业务侧的同步准入决定。
+service DeviceAdmissionService {
+  rpc Authorize(DeviceAdmissionRequest) returns (DeviceAdmissionReply);
+  rpc StartDeviceTransaction(DeviceTransactionStartRequest) returns (DeviceTransactionStartReply);
+}
+
+message DispatchCommandRequest {
+  DeviceCommandEnvelope command = 1;
+}
+
+message DispatchCommandReply {
+  DispatchStatus status = 1;
+  FailureDetail failure = 2;
+  string command_id = 3;
+}
+
+enum DispatchStatus {
+  DISPATCH_STATUS_UNSPECIFIED = 0;
+  DISPATCH_ACCEPTED = 1;
+  DISPATCH_ROUTE_STALE = 2;
+  DISPATCH_SESSION_NOT_FOUND = 3;
+  DISPATCH_REJECTED = 4;
+}
+
+message DeviceAdmissionRequest {
+  MessageMetadata metadata = 1;
+  string device_id = 2;
+  DeviceConnectedEventPayload connected = 3;
+}
+
+message DeviceAdmissionReply {
+  bool accepted = 1;
+  string reason = 2;
+}
+
+// Gateway 在需要立即回复协议帧时向 Business 请求设备主动交易准入。
+message DeviceTransactionStartRequest {
+  string device_id = 1;
+  string protocol = 2;
+  int32 connector_no = 3;
+  int64 started_at_epoch_millis = 4;
+  string start_meter_kwh = 5;
+  string start_method = 6;
+  int64 occurred_at_epoch_millis = 7;
+}
+
+message DeviceTransactionStartReply {
+  bool accepted = 1;
+  uint64 protocol_transaction_id = 2;
+  string transaction_id = 3;
+  string reason = 4;
+}

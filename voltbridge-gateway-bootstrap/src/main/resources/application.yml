@@ -1,0 +1,82 @@
+spring:
+  application:
+    name: voltbridge-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: ${REDIS_TIMEOUT:2s}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: all
+      retries: 5
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+      properties:
+        enable.idempotence: true
+        delivery.timeout.ms: 30000
+voltbridge:
+  deployment:
+    mode: gateway
+  routing:
+    mode: ${ROUTING_MODE:redis}
+  gateway:
+    node-id: ${GATEWAY_NODE_ID:gateway-1}
+    node-instance-id: ${GATEWAY_NODE_INSTANCE_ID:}
+    route-lease: ${GATEWAY_ROUTE_LEASE:PT90S}
+    route-refresh-interval: ${GATEWAY_ROUTE_REFRESH_INTERVAL:PT30S}
+    node-ttl: ${GATEWAY_NODE_TTL:PT90S}
+    node-refresh-interval: ${GATEWAY_NODE_REFRESH_INTERVAL:PT30S}
+    grpc:
+      advertised-host: ${GATEWAY_GRPC_ADVERTISED_HOST:localhost}
+      advertised-port: ${GATEWAY_GRPC_ADVERTISED_PORT:${GATEWAY_GRPC_PORT:9090}}
+  messaging:
+    kafka:
+      publisher-enabled: true
+      consumer-enabled: false
+      device-events-topic: ${DEVICE_EVENTS_TOPIC:voltbridge.device.events}
+  grpc:
+    server-enabled: true
+    server-port: ${GATEWAY_GRPC_PORT:9090}
+    business-target: ${BUSINESS_GRPC_TARGET:localhost:9091}
+    admission-timeout: ${BUSINESS_ADMISSION_TIMEOUT:2s}
+  device:
+    session.idle-timeout: ${DEVICE_SESSION_IDLE_TIMEOUT:120s}
+    command:
+      remote-start-timeout: ${REMOTE_START_TIMEOUT:30s}
+      remote-stop-timeout: ${REMOTE_STOP_TIMEOUT:30s}
+      timeout-scan-interval: ${COMMAND_TIMEOUT_SCAN_INTERVAL:1s}
+  protocol:
+    yunkuaichong:
+      pending-command-retention: ${YKC_PENDING_COMMAND_RETENTION:10m}
+      time-zone: ${YKC_TIME_ZONE:Asia/Shanghai}
+    ocpp16:
+      enabled: ${OCPP16_ENABLED:true}
+      heartbeat-interval: ${OCPP16_HEARTBEAT_INTERVAL:60s}
+      request-timeout: ${OCPP16_REQUEST_TIMEOUT:30s}
+  transport:
+    tcp:
+      endpoint-id: ${TCP_ENDPOINT_ID:yunkuaichong-v150-tcp}
+      host: ${TCP_HOST:0.0.0.0}
+      port: ${TCP_PORT:9000}
+      max-connections: ${TCP_MAX_CONNECTIONS:10000}
+      reader-idle-timeout: ${TCP_READER_IDLE_TIMEOUT:${voltbridge.device.session.idle-timeout}}
+      framing:
+        byte-order: ${TCP_FRAME_BYTE_ORDER:LITTLE_ENDIAN}
+        max-frame-length: ${TCP_MAX_FRAME_LENGTH:8192}
+        length-field-offset: ${TCP_LENGTH_FIELD_OFFSET:1}
+        length-field-length: ${TCP_LENGTH_FIELD_LENGTH:1}
+        length-adjustment: ${TCP_LENGTH_ADJUSTMENT:2}
+        initial-bytes-to-strip: ${TCP_INITIAL_BYTES_TO_STRIP:0}
+        fail-fast: ${TCP_FRAME_FAIL_FAST:true}
+    websocket:
+      enabled: ${OCPP_WEBSOCKET_ENABLED:true}
+      endpoint-id: ${OCPP_WEBSOCKET_ENDPOINT_ID:ocpp16-websocket}
+      host: ${OCPP_WEBSOCKET_HOST:0.0.0.0}
+      port: ${OCPP_WEBSOCKET_PORT:9100}
+      path: ${OCPP_WEBSOCKET_PATH:/ocpp}
+      max-content-length: ${OCPP_WEBSOCKET_MAX_CONTENT_LENGTH:1048576}
+      idle-timeout: ${OCPP_WEBSOCKET_IDLE_TIMEOUT:5m}
+management:
+  endpoints.web.exposure.include: health,info,prometheus,metrics
