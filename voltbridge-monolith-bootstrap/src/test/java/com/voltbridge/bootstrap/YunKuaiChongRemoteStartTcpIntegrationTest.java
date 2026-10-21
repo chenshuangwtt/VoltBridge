@@ -223,6 +223,8 @@ class YunKuaiChongRemoteStartTcpIntegrationTest {
             output.flush();
             await(() -> transactions.findById(transactions.findByCommandId(commandId).orElseThrow().id())
                     .map(transaction -> transaction.status() == ChargingTransactionStatus.CHARGING).orElse(false));
+            await(() -> commands.findById(commandId)
+                    .map(command -> command.status() == DeviceCommandStatus.SUCCEEDED).orElse(false));
             assertThat(commands.findById(commandId).orElseThrow().status()).isEqualTo(DeviceCommandStatus.SUCCEEDED);
 
             // 远程停充同样区分设备接受与真实结束，并验证重复业务请求的幂等性。
@@ -257,6 +259,8 @@ class YunKuaiChongRemoteStartTcpIntegrationTest {
             output.flush();
             await(() -> transactions.findByCommandId(commandId)
                     .map(transaction -> transaction.status() == ChargingTransactionStatus.ENDING).orElse(false));
+            await(() -> commands.findById(stopCommandId)
+                    .map(command -> command.status() == DeviceCommandStatus.SUCCEEDED).orElse(false));
             assertThat(commands.findById(stopCommandId).orElseThrow().status())
                     .isEqualTo(DeviceCommandStatus.SUCCEEDED);
 
