@@ -10,12 +10,13 @@ VoltBridge 当前适合以 **prototype / portfolio-grade backend** 公开发布�
 
 ## MEDIUM
 
-- Maven Wrapper 未提交，需要 Maven 3.9+。
-- REST API 未集成 OpenAPI；以 `docs/release/api.md` 和控制器为准。
+- Maven Wrapper 固定 Maven 3.9.9；本地仍需 Java 21。
+- OpenAPI 文档仅覆盖 Business/Monolith 的 REST API；Gateway 没有公开业务 HTTP API。
+- OpenAPI schema 与 Swagger UI 描述当前 REST API；端点语义和示例见 `docs/release/api.md`。
 
 ## 已验证
 
 - 公开 Git 历史、许可证、README、Maven 元数据和 GitHub Actions CI 已就绪。
 - compose 的 PostgreSQL、Kafka 与 Redis 可启动，端口可环境变量覆盖。
 - 空 PostgreSQL 已由 Flyway Testcontainers 验证初始化和重启不重复执行；真实 Redis 路由、TTL、围栏与动态 gRPC 路由通过。
-- GitHub Actions 分为 verify 与 distributed-e2e；后者运行 `mvn -Pfull-e2e verify`。
+- GitHub Actions 配置 verify 与 distributed-e2e 两个 job，均使用 Maven Wrapper；后者运行 `./mvnw -Pfull-e2e verify`。

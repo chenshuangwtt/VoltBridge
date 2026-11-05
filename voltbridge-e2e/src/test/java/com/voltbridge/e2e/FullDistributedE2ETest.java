@@ -81,6 +81,7 @@ final class FullDistributedE2ETest {
                         "REDIS_PORT", REDIS.getMappedPort(6379), "KAFKA_BOOTSTRAP_SERVERS", KAFKA.getBootstrapServers(),
                         "KAFKA_CONSUMER_GROUP", "voltbridge-e2e-business")));
         await("Business HTTP readiness", Duration.ofMinutes(2), () -> healthy(business));
+        assertBusinessOpenApi();
         seed();
         startGateway(root, redis, "gateway-a", gatewayAGrpc, gatewayATcp, gatewayAWs, businessGrpc);
         startGateway(root, redis, "gateway-b", gatewayBGrpc, gatewayBTcp, gatewayBWs, businessGrpc);
@@ -212,6 +213,21 @@ final class FullDistributedE2ETest {
     private static boolean healthy(URI base) {
         try { return HTTP.send(HttpRequest.newBuilder(base.resolve("/actuator/health")).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode() == 200; }
         catch (Exception ignored) { return false; }
+    }
+
+    private static void assertBusinessOpenApi() throws Exception {
+        HttpResponse<String> docs = HTTP.send(HttpRequest.newBuilder(business.resolve("/v3/api-docs")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(docs.statusCode()).isEqualTo(200);
+        JsonNode paths = JSON.readTree(docs.body()).path("paths");
+        assertThat(paths.has("/api/devices/{deviceCode}/commands/start-charging")).isTrue();
+        assertThat(paths.has("/api/transactions/{transactionId}")).isTrue();
+        assertThat(paths.has("/api/billing-records/by-transaction/{transactionId}")).isTrue();
+
+        HttpResponse<String> swaggerUi = HTTP.send(HttpRequest.newBuilder(business.resolve("/swagger-ui/index.html")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(swaggerUi.statusCode()).isEqualTo(200);
+        assertThat(swaggerUi.body()).contains("Swagger UI");
     }
 
     private static int freePort() throws IOException { try (ServerSocket socket = new ServerSocket(0)) { return socket.getLocalPort(); } }

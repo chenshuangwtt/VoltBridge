@@ -37,11 +37,11 @@ flowchart LR
 
 ## 快速开始（单体）
 
-前提：JDK 21、Maven 3.9+、Docker Desktop。复制 `.env.example` 中的 PostgreSQL 参数；端口冲突时可先设置 `POSTGRES_PORT=15432`。
+前提：JDK 21、Docker Desktop。Maven 3.9.9 由 Wrapper 自动下载。复制 `.env.example` 中的 PostgreSQL 参数；端口冲突时可先设置 `POSTGRES_PORT=15432`。
 
 ```powershell
 docker compose -f deploy/docker-compose.yml up -d postgres
-mvn -pl voltbridge-monolith-bootstrap -am spring-boot:run
+.\mvnw.cmd -pl voltbridge-monolith-bootstrap -am spring-boot:run
 ```
 
 默认端口：HTTP `8080`、云快充 TCP `9000`、OCPP WebSocket `9100`（路径 `/ocpp/{deviceCode}`）。单体不依赖 Redis/Kafka。
@@ -50,13 +50,13 @@ mvn -pl voltbridge-monolith-bootstrap -am spring-boot:run
 
 ```powershell
 docker compose -f deploy/docker-compose.yml up -d
-mvn -pl voltbridge-business-bootstrap -am spring-boot:run
+.\mvnw.cmd -pl voltbridge-business-bootstrap -am spring-boot:run
 
 $env:GATEWAY_NODE_ID='gateway-a'; $env:GATEWAY_GRPC_PORT='9090'; $env:TCP_PORT='9000'; $env:OCPP_WEBSOCKET_PORT='9100'
-mvn -pl voltbridge-gateway-bootstrap -am spring-boot:run
+.\mvnw.cmd -pl voltbridge-gateway-bootstrap -am spring-boot:run
 
 $env:GATEWAY_NODE_ID='gateway-b'; $env:GATEWAY_GRPC_PORT='9092'; $env:TCP_PORT='9002'; $env:OCPP_WEBSOCKET_PORT='9102'; $env:GATEWAY_GRPC_ADVERTISED_PORT='9092'
-mvn -pl voltbridge-gateway-bootstrap -am spring-boot:run
+.\mvnw.cmd -pl voltbridge-gateway-bootstrap -am spring-boot:run
 ```
 
 配置 `ROUTING_MODE=redis`（分布式默认值）后，Redis 保存 `device -> gateway node -> session` 路由及节点心跳；单体固定为 `local`，不访问 Redis。
@@ -68,11 +68,20 @@ mvn -pl voltbridge-gateway-bootstrap -am spring-boot:run
 ## 测试
 
 ```powershell
-mvn clean verify
-mvn -Pfull-e2e verify
+.\mvnw.cmd clean verify
+.\mvnw.cmd -Pfull-e2e verify
 # 显式使用本地 Redis 运行真实 Redis 验证
-mvn -pl voltbridge-infra-cache,voltbridge-infra-rpc-grpc-client -am test "-Dredis.it.enabled=true" "-Dredis.it.host=localhost" "-Dredis.it.port=6379"
+.\mvnw.cmd -pl voltbridge-infra-cache,voltbridge-infra-rpc-grpc-client -am test "-Dredis.it.enabled=true" "-Dredis.it.host=localhost" "-Dredis.it.port=6379"
 ```
+
+Linux/macOS:
+
+```sh
+./mvnw clean verify
+./mvnw -Pfull-e2e verify
+```
+
+Maven 3.9.9 由 Wrapper 自动下载；本项目仍要求本机安装 Java 21。
 
 数据库使用 Flyway 版本化迁移。新数据库由应用启动时应用 V1；旧的 `schema-init.sql` 开发库需要先按 [数据库迁移指南](docs/deployment/database-migrations.md) 检查并显式 baseline，应用不会自动标记任意非空数据库为已迁移。
 
@@ -87,6 +96,8 @@ mvn -pl voltbridge-infra-cache,voltbridge-infra-rpc-grpc-client -am test "-Dredi
 ## 路线图
 
 分布式全进程 E2E 运行要求和当前覆盖范围见 [分布式 E2E 指南](docs/testing/distributed-e2e.md)。后续仍需补充 Gateway crash/TTL 恢复、Redis outage/chaos，以及 TLS/认证与生产部署加固。
+
+Business 与 Monolith 的 REST API 文档由 OpenAPI 提供。启动任一服务后访问 `/swagger-ui.html`，或读取 `/v3/api-docs`；API 路径、异步命令语义和示例见 [REST API 文档](docs/release/api.md)。
 
 ## 许可证
 

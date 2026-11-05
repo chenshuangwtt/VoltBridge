@@ -8,7 +8,9 @@
 | Apache-2.0 LICENSE | PASS | 根 `LICENSE` 为官方 Apache License 2.0 文本 |
 | README 与 Maven 许可证元数据 | PASS | README 链接根许可证；根 POM 声明 Apache-2.0 |
 | 密钥与仓库卫生 | PASS | 未发现私钥、令牌、绝对路径或构建产物；仅保留公开本地开发默认配置 |
-| CI | PASS（双 job） | verify 执行 `mvn clean verify`；distributed-e2e 执行 `mvn -Pfull-e2e verify` |
+| CI | PASS（双 job） | verify 执行 `./mvnw clean verify`；distributed-e2e 执行 `./mvnw -Pfull-e2e verify` |
+| Maven Wrapper | PASS | Maven 3.9.9；`mvnw` / `mvnw.cmd` 和 wrapper properties 已加入 |
+| OpenAPI / Swagger UI | PASS | Business 与 Monolith 通过 SpringDoc 暴露 `/v3/api-docs` 和 `/swagger-ui.html`；Gateway 不引入 UI |
 | REAL REDIS / 围栏 / TTL | PASS | 显式真实 Redis 集成测试通过 |
 | MULTI-GATEWAY gRPC 路由 | PASS（受限） | 两个动态 gRPC Gateway + Redis 已验证；范围见测试报告 |
 | 单体与账单场景 | PASS（受限） | 现有模拟器场景覆盖当前 MVP 范围 |
