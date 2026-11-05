@@ -53,7 +53,8 @@ public class YunKuaiChongRemoteStopResultHandler implements YunKuaiChongCommandH
                     "YunKuaiChong remote stop result payload must contain 10 bytes");
         }
         String deviceCode = BcdCodec.decode(Arrays.copyOfRange(payload, 0, 7));
-        String connectorNo = BcdCodec.decode(new byte[]{payload[7]});
+        String connectorNo = YunKuaiChongRemoteStopEncoder.normalizeConnectorNo(
+                BcdCodec.decode(new byte[]{payload[7]}));
         int resultCode = payload[8] & 0xFF;
         int failureCode = payload[9] & 0xFF;
         boolean accepted = resultCode == 0x01;

@@ -48,9 +48,10 @@ public class YunKuaiChongRemoteStopEncoder implements YunKuaiChongCommandEncoder
         payload[7] = BcdCodec.encodeByte(Integer.parseInt(command.connectorNo()));
 
         byte[] frame = frameCodec.encode(context.nextSequence(), 0, REMOTE_STOP_COMMAND, payload);
-        String correlationId = correlationId(command.deviceId().value(), command.connectorNo());
+        String connectorNo = normalizeConnectorNo(command.connectorNo());
+        String correlationId = correlationId(command.deviceId().value(), connectorNo);
         pendingCommands.registerLatest(COMMAND_TYPE, correlationId, command.deviceId().value(),
-                command.connectorNo(), command.commandId());
+                connectorNo, command.commandId());
         LOGGER.info("YunKuaiChong 0x36 encoded: commandId={}, transactionId={}, tradeNo={}, deviceCode={}, connectorNo={}",
                 command.commandId(), command.transactionId(), command.protocolTransactionId(),
                 command.deviceId().value(), command.connectorNo());
@@ -58,6 +59,10 @@ public class YunKuaiChongRemoteStopEncoder implements YunKuaiChongCommandEncoder
     }
 
     public static String correlationId(String deviceCode, String connectorNo) {
-        return deviceCode + ":" + connectorNo;
+        return deviceCode + ":" + normalizeConnectorNo(connectorNo);
+    }
+
+    public static String normalizeConnectorNo(String connectorNo) {
+        return String.format("%02d", Integer.parseInt(connectorNo));
     }
 }

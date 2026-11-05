@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.voltbridge</groupId>
+        <artifactId>voltbridge-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>voltbridge-e2e</artifactId>
+    <dependencies>
+        <dependency><groupId>com.voltbridge</groupId><artifactId>voltbridge-business-bootstrap</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.voltbridge</groupId><artifactId>voltbridge-gateway-bootstrap</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.voltbridge</groupId><artifactId>voltbridge-testing</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+        <dependency><groupId>org.testcontainers</groupId><artifactId>junit-jupiter</artifactId><version>1.21.3</version><scope>test</scope></dependency>
+        <dependency><groupId>org.testcontainers</groupId><artifactId>postgresql</artifactId><version>1.21.3</version><scope>test</scope></dependency>
+        <dependency><groupId>org.testcontainers</groupId><artifactId>kafka</artifactId><version>1.21.3</version><scope>test</scope></dependency>
+        <dependency><groupId>org.testcontainers</groupId><artifactId>testcontainers</artifactId><version>1.21.3</version><scope>test</scope></dependency>
+        <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>test</scope></dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <voltbridge.fullE2e>${voltbridge.fullE2e}</voltbridge.fullE2e>
+                        <project.root>${maven.multiModuleProjectDirectory}</project.root>
+                        <api.version>1.41</api.version>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

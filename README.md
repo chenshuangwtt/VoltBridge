@@ -69,9 +69,12 @@ mvn -pl voltbridge-gateway-bootstrap -am spring-boot:run
 
 ```powershell
 mvn clean verify
+mvn -Pfull-e2e verify
 # 显式使用本地 Redis 运行真实 Redis 验证
 mvn -pl voltbridge-infra-cache,voltbridge-infra-rpc-grpc-client -am test "-Dredis.it.enabled=true" "-Dredis.it.host=localhost" "-Dredis.it.port=6379"
 ```
+
+数据库使用 Flyway 版本化迁移。新数据库由应用启动时应用 V1；旧的 `schema-init.sql` 开发库需要先按 [数据库迁移指南](docs/deployment/database-migrations.md) 检查并显式 baseline，应用不会自动标记任意非空数据库为已迁移。
 
 ## 模块
 
@@ -83,7 +86,7 @@ mvn -pl voltbridge-infra-cache,voltbridge-infra-rpc-grpc-client -am test "-Dredi
 
 ## 路线图
 
-后续工作聚焦于版本化数据库迁移、分布式全进程场景自动化、TLS/认证与生产部署加固。
+分布式全进程 E2E 运行要求和当前覆盖范围见 [分布式 E2E 指南](docs/testing/distributed-e2e.md)。后续仍需补充 Gateway crash/TTL 恢复、Redis outage/chaos，以及 TLS/认证与生产部署加固。
 
 ## 许可证
 

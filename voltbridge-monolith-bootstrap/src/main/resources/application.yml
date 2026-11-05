@@ -14,11 +14,10 @@ spring:
     hikari:
       maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
       minimum-idle: ${DB_POOL_MIN_IDLE:2}
-  # 第一阶段启动时执行幂等 schema；后续版本可迁移到 Flyway。
-  sql:
-    init:
-      mode: always
-      schema-locations: classpath:db/schema-init.sql
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+    baseline-version: 1
   jackson:
     default-property-inclusion: non_null
 

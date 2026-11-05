@@ -102,7 +102,7 @@ public final class DeviceProtoMapper {
                     .setConnector(connector(progress.connectorNo())).setTransactionId(value(progress.transactionId()))
                     .setOutputVoltage(value(progress.outputVoltage())).setOutputCurrent(value(progress.outputCurrent()))
                     .setOutputPowerKw(value(progress.outputPowerKw())).setEnergyKwh(value(progress.energyKwh()))
-                    .setChargingDurationMillis(progress.chargingDuration().toMillis())
+                    .setChargingDurationMillis(durationMillis(progress.chargingDuration()))
                     .setChargingAmount(value(progress.chargingAmount())).setAdditionalInfo(value(progress.additionalInfo()))
                     .setProtocol(progress.protocol().name());
             if (progress.stateOfCharge() != null) body.setStateOfCharge(progress.stateOfCharge());
@@ -110,7 +110,7 @@ public final class DeviceProtoMapper {
         } else if (event instanceof ChargingEndedEvent ended) {
             ChargingEndedEventPayload.Builder body = ChargingEndedEventPayload.newBuilder()
                     .setConnector(connector(ended.connectorNo())).setProtocolTransactionId(value(ended.protocolTransactionId()))
-                    .setOutputEnergyKwh(value(ended.outputEnergyKwh())).setChargingDurationMillis(ended.chargingDuration().toMillis())
+                    .setOutputEnergyKwh(value(ended.outputEnergyKwh())).setChargingDurationMillis(durationMillis(ended.chargingDuration()))
                     .setAdditionalInfo(value(ended.additionalInfo())).setChargerCode(value(ended.chargerCode()))
                     .setProtocol(ended.protocol().name());
             if (ended.endSoc() != null) body.setEndSoc(ended.endSoc());
@@ -125,8 +125,8 @@ public final class DeviceProtoMapper {
                     .setStartedAtEpochMillis(epoch(record.startedAt())).setEndedAtEpochMillis(epoch(record.endedAt()))
                     .setStartMeterKwh(value(record.startMeterKwh())).setEndMeterKwh(value(record.endMeterKwh()))
                     .setTotalEnergyKwh(value(record.totalEnergyKwh())).setTotalAmount(value(record.totalAmount()))
-                    .setVehicleVin(value(record.vehicleVin())).setStartMethod(record.startMethod().name())
-                    .setStopCategory(record.stopCategory().name()).setRawStopCode(record.rawStopCode())
+                    .setVehicleVin(value(record.vehicleVin())).setStartMethod(value(record.startMethod()))
+                    .setStopCategory(value(record.stopCategory())).setRawStopCode(record.rawStopCode())
                     .setRawStopDetail(value(record.rawStopDetail())).setTransactionTimeEpochMillis(epoch(record.transactionTime()))
                     .setRawRecord(value(record.rawRecord())).setAdditionalInfo(value(record.additionalInfo()))
                     .setProtocol(record.protocol().name());
@@ -217,7 +217,7 @@ public final class DeviceProtoMapper {
         List<EnergyBreakdownItem> items = body.getEnergyBreakdownList().stream().map(item -> new EnergyBreakdownItem(
                 blankToNull(item.getCategory()), decimal(item.getEnergyKwh()), decimal(item.getAmount()), decimal(item.getUnitPrice()))).toList();
         return new TransactionRecordEvent(eventId, deviceId, protocol(body.getProtocol()), body.getConnector().getConnectorNo(),
-                blankToNull(body.getProtocolTransactionId()), instant(body.getStartedAtEpochMillis()), instant(body.getEndedAtEpochMillis()),
+                blankToNull(body.getProtocolTransactionId()), nullableInstant(body.getStartedAtEpochMillis()), nullableInstant(body.getEndedAtEpochMillis()),
                 decimal(body.getStartMeterKwh()), decimal(body.getEndMeterKwh()), decimal(body.getTotalEnergyKwh()), decimal(body.getTotalAmount()),
                 blankToNull(body.getVehicleVin()), enumValue(ChargingStartMethod.class, body.getStartMethod(), ChargingStartMethod.UNKNOWN),
                 enumValue(ChargingStopCategory.class, body.getStopCategory(), ChargingStopCategory.UNKNOWN), body.getRawStopCode(),
@@ -250,11 +250,13 @@ public final class DeviceProtoMapper {
 
     private static ConnectorRef connector(int connectorNo) { return ConnectorRef.newBuilder().setConnectorNo(connectorNo).build(); }
     private static String value(Object value) { return value == null ? "" : value.toString(); }
+    private static long durationMillis(Duration value) { return value == null ? 0 : value.toMillis(); }
     private static String blankToNull(String value) { return value == null || value.isBlank() ? null : value; }
     private static int integer(String value) { try { return Integer.parseInt(value); } catch (RuntimeException ignored) { return 0; } }
     private static BigDecimal decimal(String value) { return value == null || value.isBlank() ? null : new BigDecimal(value); }
     private static long epoch(Instant instant) { return instant == null ? 0 : instant.toEpochMilli(); }
     private static Instant instant(long epochMillis) { return Instant.ofEpochMilli(epochMillis); }
+    private static Instant nullableInstant(long epochMillis) { return epochMillis == 0 ? null : Instant.ofEpochMilli(epochMillis); }
     private static DeviceProtocol protocol(String value) { return enumValue(DeviceProtocol.class, value, DeviceProtocol.UNKNOWN); }
     private static <T extends Enum<T>> T enumValue(Class<T> type, String value, T fallback) { try { return Enum.valueOf(type, value); } catch (RuntimeException ignored) { return fallback; } }
 }

@@ -4,9 +4,9 @@ VoltBridge 当前适合以 **prototype / portfolio-grade backend** 公开发布�
 
 ## HIGH / ROADMAP
 
-- 数据库初始化使用幂等 `schema-init.sql`，尚未采用受迁移工具管理的版本化脚本。
-- 尚未完成 Business、两个 Gateway、设备模拟器、Kafka 事件回流与账单闭环的同部署全进程自动化验收。
-- Redis 宕机、Gateway 强制终止和跨节点 Kafka 顺序尚未自动化。
+- 数据库已由 Flyway V1 baseline 管理；由旧 `schema-init.sql` 建立的本地库需人工核对后显式 baseline。
+- Full E2E profile 已实现 Business、两个 Gateway JVM、协议模拟器、Kafka 事件回流和账单闭环；A→B 同设备接管与 A stale disconnect 后 B 路由保留已覆盖。
+- Gateway 强制崩溃后的 TTL 自动恢复及 Redis outage/chaos 尚未自动化；跨节点 Kafka 顺序的额外边界仍需后续覆盖。
 
 ## MEDIUM
 
@@ -17,4 +17,5 @@ VoltBridge 当前适合以 **prototype / portfolio-grade backend** 公开发布�
 
 - 公开 Git 历史、许可证、README、Maven 元数据和 GitHub Actions CI 已就绪。
 - compose 的 PostgreSQL、Kafka 与 Redis 可启动，端口可环境变量覆盖。
-- 空 PostgreSQL 可由应用初始化；真实 Redis 路由、TTL、围栏与动态 gRPC 路由通过。
+- 空 PostgreSQL 已由 Flyway Testcontainers 验证初始化和重启不重复执行；真实 Redis 路由、TTL、围栏与动态 gRPC 路由通过。
+- GitHub Actions 分为 verify 与 distributed-e2e；后者运行 `mvn -Pfull-e2e verify`。

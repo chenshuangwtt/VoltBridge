@@ -46,7 +46,9 @@ POST /api/billing-records/by-transaction/{transactionId}/retry
 
 ## 数据库与 API
 
-现有项目使用 `voltbridge-infra-persistence/src/main/resources/db/schema-init.sql` 与 `schema_version` 维护增量结构，本次登记版本 `009`，新增：
+本章节记录 Billing 首次落库时的历史变更：当时以 `schema-init.sql` 和 `schema_version` 增量维护结构，登记版本 `009` 并新增以下表。当前正式 schema 初始化已切换为 Flyway；完整 baseline 和旧开发库迁移策略见 [数据库迁移指南](../deployment/database-migrations.md)。
+
+当时新增：
 
 - `tariff_plan`
 - `billing_record`（`transaction_id` 唯一）

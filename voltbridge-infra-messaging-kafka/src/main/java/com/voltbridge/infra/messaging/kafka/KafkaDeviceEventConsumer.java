@@ -7,6 +7,8 @@ import com.voltbridge.device.port.DeviceEventPublisher;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Business Service 的 Kafka 入站适配器。
@@ -17,6 +19,8 @@ import org.springframework.stereotype.Component;
 @ConditionalOnProperty(name = "voltbridge.messaging.kafka.consumer-enabled", havingValue = "true")
 public class KafkaDeviceEventConsumer {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(KafkaDeviceEventConsumer.class);
+
     private final DeviceEventPublisher applicationEventDispatcher;
 
     public KafkaDeviceEventConsumer(DeviceEventPublisher applicationEventDispatcher) {
@@ -26,7 +30,12 @@ public class KafkaDeviceEventConsumer {
     @KafkaListener(topics = "${voltbridge.messaging.kafka.device-events-topic:voltbridge.device.events}",
             groupId = "${voltbridge.messaging.kafka.consumer-group:voltbridge-business}")
     public void consume(byte[] payload) throws Exception {
-        DeviceEvent event = DeviceProtoMapper.fromProto(DeviceEventEnvelope.parseFrom(payload));
-        applicationEventDispatcher.publish(event);
+        try {
+            DeviceEvent event = DeviceProtoMapper.fromProto(DeviceEventEnvelope.parseFrom(payload));
+            applicationEventDispatcher.publish(event);
+        } catch (Exception exception) {
+            LOGGER.error("Kafka device event processing failed: payloadBytes={}", payload.length, exception);
+            throw exception;
+        }
     }
 }

@@ -117,7 +117,13 @@ public class HandleTransactionRecordUseCase implements DeviceEventHandler<Transa
     }
 
     private String rawFinalRecord(TransactionRecordEvent event) {
-        return "{\"frame\":\"" + event.rawRecord() + "\"}";
+        return "{\"frame\":\"" + jsonString(event.rawRecord()) + "\"}";
+    }
+
+    private String jsonString(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\b", "\\b").replace("\f", "\\f").replace("\n", "\\n")
+                .replace("\r", "\\r").replace("\t", "\\t");
     }
 
     private String additionalInfo(TransactionRecordEvent event) {

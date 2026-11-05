@@ -163,7 +163,11 @@ public final class Ocpp16Simulator implements DeviceSimulator {
     @Override
     public void disconnect() {
         if (socket != null) {
-            socket.sendClose(WebSocket.NORMAL_CLOSURE, "scenario complete").join();
+            try {
+                socket.sendClose(WebSocket.NORMAL_CLOSURE, "scenario complete").join();
+            } catch (java.util.concurrent.CompletionException closedByPeer) {
+                // A peer may already have closed after a failed/finished scenario; cleanup stays idempotent.
+            }
             trace.add("WebSocket disconnected");
             socket = null;
         }

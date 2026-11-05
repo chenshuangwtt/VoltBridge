@@ -55,6 +55,7 @@
         <module>voltbridge-monolith-bootstrap</module>
         <module>voltbridge-business-bootstrap</module>
         <module>voltbridge-gateway-bootstrap</module>
+        <module>voltbridge-e2e</module>
     </modules>
 
     <properties>
@@ -71,6 +72,16 @@
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-core</artifactId>
+                <version>11.14.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-database-postgresql</artifactId>
+                <version>11.14.1</version>
+            </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>
@@ -120,6 +131,11 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <api.version>1.41</api.version>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
         </plugins>
         <pluginManagement>
@@ -146,4 +162,13 @@
             </plugins>
         </pluginManagement>
     </build>
+
+    <profiles>
+        <profile>
+            <id>full-e2e</id>
+            <properties>
+                <voltbridge.fullE2e>true</voltbridge.fullE2e>
+            </properties>
+        </profile>
+    </profiles>
 </project>

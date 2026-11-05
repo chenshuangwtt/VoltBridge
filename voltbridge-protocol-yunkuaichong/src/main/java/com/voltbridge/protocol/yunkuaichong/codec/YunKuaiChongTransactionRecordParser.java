@@ -71,7 +71,7 @@ public class YunKuaiChongTransactionRecordParser {
         int rawStopCode = cursor.u8();
         ChargingStopCategory stopCategory = mapStopCategory(rawStopCode);
         cursor.u64();
-        String additionalInfo = loss.append("\"totalLossEnergyKwh\":")
+        String additionalInfo = loss.append(",\"totalLossEnergyKwh\":")
                 .append(lossEnergy).append('}').toString();
         return new YunKuaiChongTransactionRecordMessage(tradeNo, deviceCode, connectorNo,
                 startedAt, endedAt, startMeter, endMeter, totalEnergy, totalAmount, vin,
