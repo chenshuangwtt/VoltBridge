@@ -8,7 +8,7 @@
 
 | 数据 | 当前存储 | 说明 |
 |---|---|---|
-| 设备编码、站点、协议、厂商、业务启停状态 | `charging_device` | 稳定关系数据；登录时用于鉴权 |
+| 设备编码、站点、协议、厂商、`business_status` | `charging_device` | 稳定关系数据；`business_status` 只允许 `ENABLED` / `DISABLED`，登录时用于鉴权 |
 | 连接器编号、类型、额定功率、业务启停状态 | `charging_connector` | 稳定关系数据；不承载秒级枪状态 |
 | 在线状态、会话、`lastSeenAt` | `DeviceRuntimeStateStore` / Caffeine | 高频、短生命周期、可替换为 Redis |
 | 枪状态 | `ConnectorRuntimeStateStore` / Caffeine | 按设备编码和连接器号索引 |
@@ -16,7 +16,7 @@
 | 固件、信号、温度等非核心动态属性 | `device_attribute` | 仅在需要跨重启保留且更新频率可控时使用 |
 | 原始历史遥测 | 尚未实现 | 后续进入时序库、Kafka 或历史事件表，不写主实体 |
 
-`charging_device.status` 中现存 `ONLINE/OFFLINE` 取值仅为早期兼容约束；连接事件不再写入该列。后续数据库迁移应将该列收敛为纯业务状态枚举。
+业务状态、在线状态、连接器状态和交易/命令生命周期各自独立。设备存在于 `charging_device` 表即代表已注册；在线状态只存在于 `DeviceRuntimeStateStore`，数据库设备主表不保存在线或充电状态。
 
 ## 设备状态机
 
@@ -37,6 +37,12 @@ stateDiagram-v2
 - `DeviceRuntimeStateStore`：登录置在线、心跳刷新、断开置离线、查询在线数。
 - `ConnectorRuntimeStateStore`：更新标准枪状态、保存活跃充电进度快照。
 - 当前实现使用进程内 Caffeine；接口位于 `device-api`，未来可在不修改业务处理器的情况下替换为 Redis。
+
+## 查询与远程操作
+
+`GET /api/devices/{deviceCode}` 将 `businessStatus`（`ENABLED` / `DISABLED`）与运行态的 `onlineStatus`（`ONLINE` / `OFFLINE` / `UNKNOWN`）、`lastSeenAt` 分开返回，并附带当前已观测到的连接器运行态。运行态缺失时 API 返回 `UNKNOWN`。
+
+远程启动、停止、对时和重启在创建新命令前读取 `DeviceRuntimeStateStore`。启动还检查连接器业务/运行态以及 `STARTING/CHARGING/ENDING` 活动交易。该检查用于快速拒绝不符合资格的操作；真正下发时仍由 Gateway 的 route/session 检查处理检查与发送之间的断线竞态。设备离线时，停充请求不会创建命令，也不会改变活动交易状态。
 
 ## 心跳与路由租约
 

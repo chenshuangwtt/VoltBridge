@@ -1,17 +1,8 @@
 # 后续计费扩展路径
 
-## 分时电价
+## 时段日历扩展
 
-后续可为 `PricingType` 新增 `TIME_OF_USE`，并在 `PricingEngine` 注册 `TimeOfUsePricingPolicy`。该策略必须消费按时间范围划分的真实电表/电量片段，而不是按总电量或充电时长比例虚构峰平谷电量。
-
-需要新增的输入与配置包括：
-
-- 带开始、结束、计量值或增量电量的时间序列片段；
-- `PEAK`、`FLAT`、`VALLEY`、`OFF_PEAK` 时段定义及其单价；
-- 时区、跨日和节假日规则；
-- 在快照中保存实际命中时段、各段电量及单价。
-
-现有 `PricingPolicy`、`PricingResult` 和 `BillingLineItem` 已能承载新增行项目，但当前没有存储时间序列，也没有实现分时计算。
+当前已支持每天 24 小时的 `PEAK`、`FLAT`、`VALLEY` 分时价格、IANA 时区、跨日边界切分和基于真实累计电表读数的局部插值。后续可以另行设计工作日/周末、节假日、尖峰或特殊费率日历；不能破坏已有 revision、meter timeline 和账单快照语义。
 
 ## 会员折扣与营销
 

@@ -2,10 +2,19 @@ package com.voltbridge.business.application.billing;
 
 import com.voltbridge.business.domain.billing.BillingRecord;
 import com.voltbridge.business.domain.billing.BillingRecordRepository;
+import com.voltbridge.business.domain.billing.ChargingMeterSample;
+import com.voltbridge.business.domain.billing.ChargingMeterSampleRepository;
+import com.voltbridge.business.domain.billing.MeterTimeline;
+import com.voltbridge.business.domain.billing.PricingContext;
 import com.voltbridge.business.domain.billing.FixedRatePricingPolicy;
 import com.voltbridge.business.domain.billing.PricingResult;
+import com.voltbridge.business.domain.billing.PricingType;
 import com.voltbridge.business.domain.billing.TariffPlan;
+import com.voltbridge.business.domain.billing.TariffRole;
+import com.voltbridge.business.domain.billing.TariffEffectiveRange;
 import com.voltbridge.business.domain.billing.TariffPlanRepository;
+import com.voltbridge.business.domain.billing.TariffPeriod;
+import com.voltbridge.business.domain.billing.TariffPeriodType;
 import com.voltbridge.business.domain.transaction.ChargingTransaction;
 import com.voltbridge.business.domain.transaction.ChargingTransactionRepository;
 import com.voltbridge.business.domain.transaction.ChargingTransactionStatus;
@@ -14,12 +23,14 @@ import com.voltbridge.common.time.TimeProvider;
 import com.voltbridge.device.model.ChargingStartMethod;
 import com.voltbridge.device.model.ChargingStopCategory;
 import com.voltbridge.device.model.DeviceProtocol;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -47,7 +58,10 @@ class BillingMvpTest {
     void calculatesFixedRateWithCentralizedRounding() {
         TariffPlan tariff = activeTariff(UUID.randomUUID(), new BigDecimal("0.80"), new BigDecimal("0.20"));
 
-        PricingResult result = new FixedRatePricingPolicy().calculate(new BigDecimal("20.000000"), tariff);
+        ChargingTransaction transaction = completedTransaction(tariff.tenantId(), DeviceProtocol.OCPP_16,
+                new BigDecimal("20.000000"));
+        PricingResult result = new FixedRatePricingPolicy().calculate(
+                new PricingContext(transaction, tariff, MeterTimeline.notRequired()));
 
         assertThat(result.energyFee()).isEqualByComparingTo("16.00");
         assertThat(result.serviceFee()).isEqualByComparingTo("4.00");
@@ -62,8 +76,12 @@ class BillingMvpTest {
         TariffPlan tariff = activeTariff(UUID.randomUUID(), new BigDecimal("0.123456"), BigDecimal.ZERO);
         FixedRatePricingPolicy policy = new FixedRatePricingPolicy();
 
-        PricingResult zero = policy.calculate(BigDecimal.ZERO, tariff);
-        PricingResult fractional = policy.calculate(new BigDecimal("1.234567"), tariff);
+        PricingResult zero = policy.calculate(new PricingContext(
+                completedTransaction(tariff.tenantId(), DeviceProtocol.OCPP_16, BigDecimal.ZERO), tariff,
+                MeterTimeline.notRequired()));
+        PricingResult fractional = policy.calculate(new PricingContext(
+                completedTransaction(tariff.tenantId(), DeviceProtocol.OCPP_16, new BigDecimal("1.234567")), tariff,
+                MeterTimeline.notRequired()));
 
         assertThat(zero.totalAmount()).isEqualByComparingTo("0.00");
         assertThat(fractional.energyFee()).isEqualByComparingTo("0.15");
@@ -125,13 +143,69 @@ class BillingMvpTest {
     }
 
     @Test
+    void completesTimeOfUseBillingAndKeepsHistoricalSnapshotAfterNextRevision() {
+        UUID tenantId = UUID.randomUUID();
+        Instant start = LocalDateTime.parse("2026-11-01T06:50:00")
+                .atZone(ZoneId.of("Asia/Shanghai")).toInstant();
+        Instant boundary = LocalDateTime.parse("2026-11-01T07:00:00")
+                .atZone(ZoneId.of("Asia/Shanghai")).toInstant();
+        Instant end = LocalDateTime.parse("2026-11-01T07:10:00")
+                .atZone(ZoneId.of("Asia/Shanghai")).toInstant();
+        ChargingTransaction transaction = completedTransaction(tenantId, DeviceProtocol.OCPP_16,
+                start, end, new BigDecimal("100.000000"), new BigDecimal("100.060000"), new BigDecimal("0.060000"));
+        InMemoryTransactions transactions = new InMemoryTransactions();
+        transactions.save(transaction);
+        InMemoryTariffs tariffs = new InMemoryTariffs();
+        TariffPlan tariff = TariffPlan.create(tenantId, "Daily TOU", "CNY", PricingType.TIME_OF_USE,
+                "Asia/Shanghai", List.of(
+                        new TariffPeriod(1, com.voltbridge.business.domain.billing.TariffPeriodType.VALLEY,
+                                0, 420, new BigDecimal("0.60"), new BigDecimal("0.20")),
+                        new TariffPeriod(2, com.voltbridge.business.domain.billing.TariffPeriodType.PEAK,
+                                420, 600, new BigDecimal("1.20"), new BigDecimal("0.30")),
+                        new TariffPeriod(3, com.voltbridge.business.domain.billing.TariffPeriodType.FLAT,
+                                600, 1020, new BigDecimal("0.80"), new BigDecimal("0.20")),
+                        new TariffPeriod(4, com.voltbridge.business.domain.billing.TariffPeriodType.PEAK,
+                                1020, 1260, new BigDecimal("1.20"), new BigDecimal("0.30")),
+                        new TariffPeriod(5, com.voltbridge.business.domain.billing.TariffPeriodType.VALLEY,
+                                1260, 1440, new BigDecimal("0.60"), new BigDecimal("0.20"))),
+                Instant.EPOCH, null, NOW);
+        tariff.activate(NOW);
+        tariffs.save(tariff);
+        InMemoryBills bills = new InMemoryBills();
+        InMemoryMeterSamples samples = new InMemoryMeterSamples();
+        samples.saveIfAbsent(new ChargingMeterSample(UUID.randomUUID(), transaction.id(), boundary,
+                new BigDecimal("100.030000"), new BigDecimal("7.2"), 45, DeviceProtocol.OCPP_16));
+        BillCompletedTransactionUseCase billing = new BillCompletedTransactionUseCase(transactions, bills, samples,
+                new DefaultTariffResolver(tariffs), new DefaultPricingEngine(),
+                new PricingSnapshotSerializer(new ObjectMapper().findAndRegisterModules()), clock());
+
+        BillingRecord bill = billing.execute(transaction.id());
+        String historicalSnapshot = bill.pricingSnapshot();
+        assertThat(bill.tariffPlanId()).isEqualTo(tariff.id());
+        assertThat(bill.energyFee()).isEqualByComparingTo("0.06");
+        assertThat(bill.serviceFee()).isEqualByComparingTo("0.02");
+        assertThat(bill.totalAmount()).isEqualByComparingTo("0.08");
+        assertThat(bill.lineItems()).hasSize(4);
+        assertThat(historicalSnapshot).contains("familyId", "revision", "TIME_OF_USE", "Asia/Shanghai",
+                "appliedSegments", "VALLEY", "PEAK");
+
+        TariffPlan revision = new CreateTariffRevisionUseCase(tariffs, clock()).execute(tariff.id(),
+                "Daily TOU revised", "CNY", PricingType.TIME_OF_USE, "Asia/Shanghai", tariff.periods(),
+                end, null);
+        assertThat(revision.revision()).isEqualTo(2);
+        BillingRecord repeated = billing.execute(transaction.id());
+        assertThat(repeated.pricingSnapshot()).isEqualTo(historicalSnapshot);
+        assertThat(repeated.totalAmount()).isEqualByComparingTo("0.08");
+    }
+
+    @Test
     void resolvesHistoricalEffectiveTariffAndExcludesExpiredAndFuturePlans() {
         UUID tenantId = UUID.randomUUID();
         InMemoryTariffs tariffs = new InMemoryTariffs();
         TariffPlan historical = activeTariff(tenantId, new BigDecimal("0.80"), new BigDecimal("0.20"),
                 NOW.minusSeconds(7200), NOW.minusSeconds(3600));
         TariffPlan current = activeTariff(tenantId, BigDecimal.ONE, BigDecimal.ZERO,
-                NOW.minusSeconds(3600), null);
+                NOW.minusSeconds(3600), NOW.plusSeconds(3600));
         TariffPlan future = activeTariff(tenantId, BigDecimal.TEN, BigDecimal.ZERO,
                 NOW.plusSeconds(3600), null);
         tariffs.save(historical);
@@ -141,10 +215,10 @@ class BillingMvpTest {
         tariffs.save(activeTariff(expiredTenantId, BigDecimal.ONE, BigDecimal.ZERO,
                 NOW.minusSeconds(7200), NOW.minusSeconds(3600)));
 
-        assertThat(tariffs.findEffectiveActive(tenantId, NOW.minusSeconds(5400))).contains(historical);
-        assertThat(tariffs.findEffectiveActive(tenantId, NOW)).contains(current);
-        assertThat(tariffs.findEffectiveActive(tenantId, NOW.plusSeconds(7200))).contains(future);
-        assertThat(tariffs.findEffectiveActive(expiredTenantId, NOW)).isEmpty();
+        assertThat(tariffs.findEffectiveAt(tenantId, TariffRole.SCHEDULED, NOW.minusSeconds(5400))).containsExactly(historical);
+        assertThat(tariffs.findEffectiveAt(tenantId, TariffRole.SCHEDULED, NOW)).containsExactly(current);
+        assertThat(tariffs.findEffectiveAt(tenantId, TariffRole.SCHEDULED, NOW.plusSeconds(7200))).containsExactly(future);
+        assertThat(tariffs.findEffectiveAt(expiredTenantId, TariffRole.SCHEDULED, NOW)).isEmpty();
     }
 
     @Test
@@ -162,8 +236,9 @@ class BillingMvpTest {
         assertThatThrownBy(() -> billing.execute(transaction.id()))
                 .isInstanceOf(VoltBridgeException.class)
                 .hasMessageContaining("not completed");
-        assertThatThrownBy(() -> new FixedRatePricingPolicy().calculate(new BigDecimal("-0.1"),
-                activeTariff(tenantId, BigDecimal.ONE, BigDecimal.ZERO)))
+        assertThatThrownBy(() -> new FixedRatePricingPolicy().calculate(new PricingContext(
+                completedTransaction(tenantId, DeviceProtocol.OCPP_16, new BigDecimal("-0.1")),
+                activeTariff(tenantId, BigDecimal.ONE, BigDecimal.ZERO), MeterTimeline.notRequired())))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(bills.size()).isZero();
     }
@@ -171,7 +246,8 @@ class BillingMvpTest {
     private BillCompletedTransactionUseCase billing(InMemoryTransactions transactions, InMemoryBills bills,
                                                     InMemoryTariffs tariffs) {
         return new BillCompletedTransactionUseCase(transactions, bills,
-                new DefaultTariffResolver(tariffs), new DefaultPricingEngine(), clock());
+                new InMemoryMeterSamples(), new DefaultTariffResolver(tariffs), new DefaultPricingEngine(),
+                new PricingSnapshotSerializer(new ObjectMapper().findAndRegisterModules()), clock());
     }
 
     private TimeProvider clock() {
@@ -184,29 +260,39 @@ class BillingMvpTest {
 
     private TariffPlan activeTariff(UUID tenantId, BigDecimal energyPrice, BigDecimal serviceFee,
                                     Instant effectiveFrom, Instant effectiveTo) {
-        TariffPlan tariff = TariffPlan.create(tenantId, "MVP", "CNY", energyPrice, serviceFee,
-                effectiveFrom, effectiveTo, NOW);
+        TariffPlan tariff = TariffPlan.create(tenantId, "MVP", "CNY", PricingType.FIXED,
+                "Asia/Shanghai", List.of(new TariffPeriod(1, TariffPeriodType.FLAT, 0, 1440,
+                        energyPrice, serviceFee)), effectiveFrom, effectiveTo, NOW);
         tariff.activate(NOW);
         return tariff;
     }
 
     private ChargingTransaction completedTransaction(UUID tenantId, DeviceProtocol protocol, BigDecimal energy) {
+        return completedTransaction(tenantId, protocol, NOW.minusSeconds(3500), NOW.minusSeconds(10),
+                BigDecimal.ZERO, energy, energy);
+    }
+
+    private ChargingTransaction completedTransaction(UUID tenantId, DeviceProtocol protocol,
+                                                     Instant startedAt, Instant endedAt,
+                                                     BigDecimal startMeter, BigDecimal endMeter,
+                                                     BigDecimal energy) {
         ChargingTransaction transaction = ChargingTransaction.start(tenantId, UUID.randomUUID(), "DEVICE-001",
-                UUID.randomUUID(), 1, protocol, UUID.randomUUID(), "test", NOW.minusSeconds(3600));
-        transaction.begin("1001", NOW.minusSeconds(3500), BigDecimal.ZERO,
-                ChargingStartMethod.REMOTE, NOW.minusSeconds(3500));
-        transaction.finalizeRecord(NOW.minusSeconds(3500), NOW.minusSeconds(10), BigDecimal.ZERO, energy, energy,
+                UUID.randomUUID(), 1, protocol, UUID.randomUUID(), "test", startedAt.minusSeconds(60));
+        transaction.begin("1001", startedAt, startMeter, ChargingStartMethod.REMOTE, startedAt);
+        transaction.finalizeRecord(startedAt, endedAt, startMeter, endMeter, energy,
                 new BigDecimal("999"), null, ChargingStartMethod.REMOTE, ChargingStopCategory.USER_STOP,
-                0, "done", null, NOW, "{}", "{}");
+                0, "done", null, endedAt, "{}", "{}");
         return transaction;
     }
 
     private static final class InMemoryTariffs implements TariffPlanRepository {
         private final Map<UUID, TariffPlan> values = new ConcurrentHashMap<>();
+        private final Map<UUID, Integer> revisionHighWaterMarks = new ConcurrentHashMap<>();
 
         @Override
         public void save(TariffPlan plan) {
             values.put(plan.id(), plan);
+            revisionHighWaterMarks.merge(plan.familyId(), plan.revision(), Math::max);
         }
 
         @Override
@@ -220,10 +306,42 @@ class BillingMvpTest {
         }
 
         @Override
-        public Optional<TariffPlan> findEffectiveActive(UUID tenantId, Instant time) {
-            return values.values().stream()
-                    .filter(plan -> plan.tenantId().equals(tenantId) && plan.effectiveAt(time))
-                    .max(Comparator.comparing(TariffPlan::effectiveFrom));
+        public List<TariffPlan> findEffectiveAt(UUID tenantId, TariffRole role, Instant time) {
+            List<TariffPlan> matches = values.values().stream()
+                    .filter(plan -> plan.tenantId().equals(tenantId)
+                            && plan.role() == role && plan.effectiveAt(time))
+                    .toList();
+            return matches;
+        }
+
+        @Override
+        public List<TariffPlan> findActiveOverlapping(UUID tenantId, Instant from, Instant to,
+                                                      UUID excludingPlanId) {
+            TariffEffectiveRange candidate = new TariffEffectiveRange(from, to);
+            return values.values().stream().filter(plan -> !plan.id().equals(excludingPlanId)
+                    && plan.tenantId().equals(tenantId) && plan.role() == TariffRole.SCHEDULED
+                    && plan.status() == com.voltbridge.business.domain.billing.TariffPlanStatus.ACTIVE
+                    && plan.effectiveRange().overlaps(candidate)).toList();
+        }
+
+        @Override public void lockTenantForTariffLifecycle(UUID tenantId) { }
+        @Override public void lockFamilyForRevision(UUID familyId) { }
+
+        @Override
+        public int nextRevision(UUID familyId) {
+            return revisionHighWaterMarks.merge(familyId, 1, Integer::sum);
+        }
+        @Override public boolean delete(UUID id) { return values.remove(id) != null; }
+    }
+
+    private static final class InMemoryMeterSamples implements ChargingMeterSampleRepository {
+        private final ConcurrentMap<UUID, ChargingMeterSample> values = new ConcurrentHashMap<>();
+        @Override public boolean saveIfAbsent(ChargingMeterSample sample) {
+            return values.putIfAbsent(sample.eventId(), sample) == null;
+        }
+        @Override public List<ChargingMeterSample> findByTransactionId(UUID transactionId) {
+            return values.values().stream().filter(sample -> sample.transactionId().equals(transactionId))
+                    .sorted(java.util.Comparator.comparing(ChargingMeterSample::occurredAt)).toList();
         }
     }
 
@@ -238,6 +356,11 @@ class BillingMvpTest {
         @Override
         public Optional<BillingRecord> findByTransactionId(UUID id) {
             return Optional.ofNullable(values.get(id));
+        }
+
+        @Override
+        public boolean existsByTariffPlanId(UUID tariffPlanId) {
+            return values.values().stream().anyMatch(value -> value.tariffPlanId().equals(tariffPlanId));
         }
 
         @Override

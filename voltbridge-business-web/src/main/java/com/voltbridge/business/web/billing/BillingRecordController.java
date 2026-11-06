@@ -37,7 +37,7 @@ public class BillingRecordController {
         this.billCompletedTransaction = billCompletedTransaction;
     }
     @GetMapping("/{billingRecordId}")
-    @Operation(summary = "Get a billing record", description = "Returns the fixed-rate MVP energy fee, service fee, total, line items, tariff reference and immutable pricing snapshot.")
+    @Operation(summary = "Get a billing record", description = "Returns the calculated energy fee, service fee, total, line items, tariff revision and immutable pricing snapshot.")
     public ApiResponse<BillingRecordView> find(@PathVariable UUID billingRecordId) { return ApiResponse.success(BillingRecordView.from(get.byId(billingRecordId))); }
     @GetMapping("/by-transaction/{transactionId}")
     @Operation(summary = "Get a billing record by transaction")

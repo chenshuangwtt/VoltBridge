@@ -8,6 +8,7 @@ import com.voltbridge.device.event.CommandResultStatus;
 import com.voltbridge.device.event.DeviceDiagnosticEvent;
 import com.voltbridge.device.model.DeviceTransactionStartResult;
 import com.voltbridge.device.model.DeviceId;
+import com.voltbridge.device.model.DeviceOperationCapabilities;
 import com.voltbridge.device.model.DeviceProtocol;
 import com.voltbridge.protocol.common.ProtocolContext;
 import com.voltbridge.protocol.common.codec.BcdCodec;
@@ -118,6 +119,12 @@ class YunKuaiChongOperationsProtocolTest {
         assertThat(acknowledgement.sequenceNumber()).isEqualTo(23);
         assertThat(acknowledgement.payload()).hasSize(44);
         assertThat(BcdCodec.decode(Arrays.copyOfRange(acknowledgement.payload(), 0, 16))).isEqualTo("00000000000000000000000000000042");
+    }
+
+    @Test
+    void declaresSupportedYunKuaiChongOperations() {
+        assertThat(fixture().adapter.operationCapabilities()).isEqualTo(
+                new DeviceOperationCapabilities(true, true, true, true));
     }
 
     private Fixture fixture() {

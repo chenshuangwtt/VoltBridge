@@ -2,6 +2,7 @@ package com.voltbridge.business.application.device;
 
 import com.voltbridge.business.domain.device.ChargingDeviceRepository;
 import com.voltbridge.business.domain.device.ChargingDevice;
+import com.voltbridge.business.domain.device.DeviceBusinessStatus;
 import com.voltbridge.device.event.DeviceConnectedEvent;
 import com.voltbridge.device.event.DeviceEvent;
 import com.voltbridge.device.model.DeviceConnectionDecision;
@@ -33,7 +34,7 @@ public class HandleDeviceConnectedUseCase implements DeviceConnectionAuthorizer,
             LOGGER.warn("Device login rejected: deviceCode={}, reason=not_registered", event.deviceId().value());
             return DeviceConnectionDecision.reject("device_not_registered");
         }
-        if ("DISABLED".equals(device.status())) {
+        if (device.businessStatus() == DeviceBusinessStatus.DISABLED) {
             LOGGER.warn("Device login rejected: deviceCode={}, reason=disabled", event.deviceId().value());
             return DeviceConnectionDecision.reject("device_disabled");
         }

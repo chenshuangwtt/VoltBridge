@@ -3,6 +3,8 @@ package com.voltbridge.business.application.charging;
 import com.voltbridge.business.domain.command.DeviceCommand;
 import com.voltbridge.business.domain.command.DeviceCommandRepository;
 import com.voltbridge.business.domain.command.DeviceCommandType;
+import com.voltbridge.business.application.command.DeviceCommandFailure;
+import com.voltbridge.business.application.device.DeviceOperationPreconditions;
 import com.voltbridge.business.domain.connector.Connector;
 import com.voltbridge.business.domain.connector.ConnectorRepository;
 import com.voltbridge.business.domain.device.ChargingDevice;
@@ -42,6 +44,7 @@ public class StopChargingUseCase {
     private final ChargingDeviceRepository deviceRepository;
     private final ConnectorRepository connectorRepository;
     private final ChargingTransactionRepository transactionRepository;
+    private final DeviceOperationPreconditions operationPreconditions;
     private final DeviceCommandRepository commandRepository;
     private final DeviceCommandGateway commandGateway;
     private final TimeProvider timeProvider;
@@ -50,6 +53,7 @@ public class StopChargingUseCase {
     public StopChargingUseCase(ChargingDeviceRepository deviceRepository,
                                ConnectorRepository connectorRepository,
                                ChargingTransactionRepository transactionRepository,
+                               DeviceOperationPreconditions operationPreconditions,
                                DeviceCommandRepository commandRepository,
                                DeviceCommandGateway commandGateway,
                                TimeProvider timeProvider,
@@ -58,6 +62,7 @@ public class StopChargingUseCase {
         this.deviceRepository = deviceRepository;
         this.connectorRepository = connectorRepository;
         this.transactionRepository = transactionRepository;
+        this.operationPreconditions = operationPreconditions;
         this.commandRepository = commandRepository;
         this.commandGateway = commandGateway;
         this.timeProvider = timeProvider;
@@ -68,6 +73,7 @@ public class StopChargingUseCase {
         // 阶段一：停充目标是平台活动交易，而不是调用方传入的协议流水号。
         ChargingDevice device = deviceRepository.findByDeviceCode(deviceCode)
                 .orElseThrow(() -> new VoltBridgeException("DEVICE_NOT_FOUND", "Device not found: " + deviceCode));
+        operationPreconditions.requireOnline(device);
         int parsedConnectorNo = parseConnectorNo(connectorNo);
         Connector connector = connectorRepository.findByDeviceIdAndConnectorNo(device.id(), parsedConnectorNo)
                 .orElseThrow(() -> new VoltBridgeException("CONNECTOR_NOT_FOUND",
@@ -133,22 +139,18 @@ public class StopChargingUseCase {
             return;
         }
         Throwable cause = unwrap(error);
-        String code = cause instanceof VoltBridgeException exception
-                ? exception.code() : "TRANSPORT_WRITE_FAILED";
-        if (command.markFailed(code, cause.getMessage(), "{}", now)) {
+        String code = DeviceCommandFailure.code(cause, "TRANSPORT_WRITE_FAILED");
+        if (command.markFailed(code, DeviceCommandFailure.reason(cause), "{}", now)) {
             commandRepository.save(command);
-            LOGGER.warn("Stop command send failed: commandId={}, transactionId={}, code={}, reason={}",
-                    command.id(), command.businessRef(), code, cause.getMessage());
+            DeviceCommandFailure.log(LOGGER, "Stop command send failed", command.id(), code, cause);
         }
     }
 
     private void failBeforeDispatch(DeviceCommand command, RuntimeException exception) {
-        String code = exception instanceof VoltBridgeException voltBridgeException
-                ? voltBridgeException.code() : "DISPATCH_FAILED";
-        command.markFailed(code, exception.getMessage(), "{}", timeProvider.now());
+        String code = DeviceCommandFailure.code(exception, "DISPATCH_FAILED");
+        command.markFailed(code, DeviceCommandFailure.reason(exception), "{}", timeProvider.now());
         commandRepository.save(command);
-        LOGGER.warn("Stop command dispatch rejected: commandId={}, transactionId={}, code={}",
-                command.id(), command.businessRef(), code);
+        DeviceCommandFailure.log(LOGGER, "Stop command dispatch rejected", command.id(), code, exception);
     }
 
     private int parseConnectorNo(String connectorNo) {

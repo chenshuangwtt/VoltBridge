@@ -4,4 +4,4 @@
 
 手工演示时先创建并激活固定费率方案，再启动平台和 `ManualSimulatorMain`，调用 `/api/devices/{deviceCode}/commands/start-charging`，等待模拟器完成，最后查询 `/api/transactions/{transactionId}` 与 `/api/billing-records/by-transaction/{transactionId}`。
 
-当前没有为多 Gateway 部署完成同一链路的全进程自动化验收，不能把本页视为分布式生产验收记录。
+同一业务闭环也由 [Full Distributed E2E](../testing/distributed-e2e.md) 在 Business、两个独立 Gateway JVM、PostgreSQL、Kafka 和 Redis 上验收。本页是 prototype 演示指南，不代表生产故障演练或生产验收。

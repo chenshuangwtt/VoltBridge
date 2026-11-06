@@ -1,15 +1,9 @@
--- VoltBridge 数据库结构版本记录
-CREATE SEQUENCE IF NOT EXISTS protocol_transaction_id_seq
+-- Durable numeric IDs for protocol transaction correlation.
+CREATE SEQUENCE protocol_transaction_id_seq
     AS BIGINT START WITH 1 INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 NO CYCLE;
 
-CREATE TABLE IF NOT EXISTS schema_version (
-    version VARCHAR(64) PRIMARY KEY,                              -- 结构版本号
-    description VARCHAR(255) NOT NULL,                           -- 本次结构变更说明
-    installed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP  -- 结构版本安装时间
-);
-
 -- 租户基础信息
-CREATE TABLE IF NOT EXISTS tenant (
+CREATE TABLE tenant (
     id UUID PRIMARY KEY,                                                    -- 租户主键 UUID
     tenant_code VARCHAR(64) NOT NULL UNIQUE,                                -- 租户唯一编码
     tenant_name VARCHAR(128) NOT NULL,                                      -- 租户名称
@@ -20,7 +14,7 @@ CREATE TABLE IF NOT EXISTS tenant (
 );
 
 -- 平台用户账号
-CREATE TABLE IF NOT EXISTS app_user (
+CREATE TABLE app_user (
     id UUID PRIMARY KEY,                                                             -- 用户主键 UUID
     tenant_id UUID NOT NULL REFERENCES tenant(id),                                  -- 所属租户 ID
     username VARCHAR(64) NOT NULL,                                                   -- 租户内唯一登录名
@@ -34,7 +28,7 @@ CREATE TABLE IF NOT EXISTS app_user (
 );
 
 -- 充电站点
-CREATE TABLE IF NOT EXISTS charging_station (
+CREATE TABLE charging_station (
     id UUID PRIMARY KEY,                                                       -- 充电站主键 UUID
     tenant_id UUID NOT NULL REFERENCES tenant(id),                            -- 所属租户 ID
     station_code VARCHAR(64) NOT NULL,                                        -- 租户内唯一站点编码
@@ -53,7 +47,7 @@ CREATE TABLE IF NOT EXISTS charging_station (
 );
 
 -- 接入平台的充电设备或充电桩
-CREATE TABLE IF NOT EXISTS charging_device (
+CREATE TABLE charging_device (
     id UUID PRIMARY KEY,                                                                           -- 设备主键 UUID
     tenant_id UUID NOT NULL REFERENCES tenant(id),                                                  -- 所属租户 ID
     station_id UUID NOT NULL REFERENCES charging_station(id),                                      -- 所属充电站 ID
@@ -65,7 +59,7 @@ CREATE TABLE IF NOT EXISTS charging_device (
     brand VARCHAR(128),                                                                           -- 设备品牌
     model VARCHAR(128),                                                                           -- 设备型号
     device_type VARCHAR(64),                                                                      -- 设备类型
-    status VARCHAR(32) NOT NULL CHECK (status IN ('REGISTERED', 'ONLINE', 'OFFLINE', 'DISABLED')), -- 设备业务状态，不代表瞬时 TCP 在线状态
+    business_status VARCHAR(32) NOT NULL CHECK (business_status IN ('ENABLED', 'DISABLED')), -- 稳定运营业务状态
     additional_info JSONB NOT NULL DEFAULT '{}'::jsonb,                                            -- 非核心扩展信息 JSON
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,                                     -- 创建时间
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,                                     -- 最后更新时间
@@ -73,7 +67,7 @@ CREATE TABLE IF NOT EXISTS charging_device (
 );
 
 -- 充电设备下的物理充电枪或连接器
-CREATE TABLE IF NOT EXISTS charging_connector (
+CREATE TABLE charging_connector (
     id UUID PRIMARY KEY,                                                                                                  -- 连接器主键 UUID
     tenant_id UUID NOT NULL REFERENCES tenant(id),                                                                        -- 所属租户 ID
     station_id UUID NOT NULL REFERENCES charging_station(id),                                                            -- 所属充电站 ID
@@ -91,7 +85,7 @@ CREATE TABLE IF NOT EXISTS charging_connector (
 );
 
 -- 设备动态扩展属性，按类型列存储
-CREATE TABLE IF NOT EXISTS device_attribute (
+CREATE TABLE device_attribute (
     device_id UUID NOT NULL REFERENCES charging_device(id),                                          -- 所属设备 ID
     attr_key VARCHAR(128) NOT NULL,                                                                   -- 属性键，与 device_id 组成主键
     value_type VARCHAR(32) NOT NULL CHECK (value_type IN ('BOOLEAN', 'STRING', 'LONG', 'DOUBLE', 'JSON')), -- 属性值类型
@@ -114,7 +108,7 @@ CREATE TABLE IF NOT EXISTS device_attribute (
 );
 
 -- 平台下发给设备的命令及其完整生命周期
-CREATE TABLE IF NOT EXISTS device_command (
+CREATE TABLE device_command (
     id UUID PRIMARY KEY,                                                                                                                   -- 命令主键 UUID，同时作为统一 command_id
     tenant_id UUID NOT NULL REFERENCES tenant(id),                                                                                        -- 所属租户 ID
     device_id UUID NOT NULL REFERENCES charging_device(id),                                                                              -- 目标设备 ID
@@ -139,7 +133,7 @@ CREATE TABLE IF NOT EXISTS device_command (
 );
 
 -- 一次完整充电交易或充电会话
-CREATE TABLE IF NOT EXISTS charging_transaction (
+CREATE TABLE charging_transaction (
     id UUID PRIMARY KEY,                                                                                                                   -- 充电交易主键 UUID
     tenant_id UUID NOT NULL REFERENCES tenant(id),                                                                                        -- 所属租户 ID
     device_id UUID NOT NULL REFERENCES charging_device(id),                                                                              -- 执行充电的设备 ID
@@ -176,26 +170,63 @@ CREATE TABLE IF NOT EXISTS charging_transaction (
     CONSTRAINT ck_charging_transaction_time CHECK (ended_at IS NULL OR started_at IS NULL OR ended_at >= started_at)                      -- 结束时间不得早于开始时间
 );
 
--- 可版本化的固定资费方案；费率变更通过新建方案完成，避免篡改历史账单语义
-CREATE TABLE IF NOT EXISTS tariff_plan (
+-- 资费业务版本；version 只作为数据库乐观锁，不表示运营 revision
+CREATE TABLE tariff_plan (
     id UUID PRIMARY KEY,                                                                                                                   -- 资费方案主键 UUID
+    family_id UUID NOT NULL,                                                                                                               -- 资费版本族，同一 family 下 revision 递增
+    revision INTEGER NOT NULL CHECK (revision > 0),                                                                                       -- 运营可见的业务版本号
     tenant_id UUID NOT NULL REFERENCES tenant(id),                                                                                        -- 所属租户 ID
+    role VARCHAR(16) NOT NULL DEFAULT 'SCHEDULED' CHECK (role IN ('FALLBACK', 'SCHEDULED')),                                               -- 兜底或运营排期资费
     name VARCHAR(128) NOT NULL,                                                                                                           -- 运营人员可读的方案名称
     currency VARCHAR(8) NOT NULL,                                                                                                        -- ISO 货币代码，例如 CNY
-    pricing_type VARCHAR(32) NOT NULL CHECK (pricing_type IN ('FIXED')),                                                                  -- 当前仅固定费率，后续可扩展计价类型
-    energy_price_per_kwh NUMERIC(20, 6) NOT NULL CHECK (energy_price_per_kwh >= 0),                                                       -- 每 kWh 电能单价
-    service_fee_per_kwh NUMERIC(20, 6) NOT NULL CHECK (service_fee_per_kwh >= 0),                                                         -- 每 kWh 服务费单价
+    pricing_type VARCHAR(32) NOT NULL CHECK (pricing_type IN ('FIXED', 'TIME_OF_USE')),                                                   -- 固定或每日分时计价
+    timezone VARCHAR(64) NOT NULL,                                                                                                        -- 日内自然日使用的 IANA ZoneId
     effective_from TIMESTAMPTZ NOT NULL,                                                                                                  -- 按交易开始时间解析的生效起点
     effective_to TIMESTAMPTZ,                                                                                                             -- 生效终点，空值表示持续有效
     status VARCHAR(32) NOT NULL CHECK (status IN ('DRAFT', 'ACTIVE', 'RETIRED')),                                                        -- 资费方案生命周期
     activated_at TIMESTAMPTZ,                                                                                                             -- 显式启用时间
+    retired_at TIMESTAMPTZ,                                                                                                               -- 退役边界，供历史交易解析
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,                                                                            -- 方案创建时间
     version BIGINT NOT NULL DEFAULT 0,                                                                                                   -- 乐观锁版本号
-    CONSTRAINT ck_tariff_plan_effective_time CHECK (effective_to IS NULL OR effective_to > effective_from)                               -- 生效终点必须晚于起点
+    CONSTRAINT uk_tariff_family_revision UNIQUE (family_id, revision),                                                                   -- 同一业务版本族内 revision 唯一
+    CONSTRAINT ck_tariff_plan_effective_time CHECK (effective_to IS NULL OR effective_to > effective_from),                              -- 生效终点必须晚于起点
+    CONSTRAINT ck_tariff_fallback_fixed CHECK (role <> 'FALLBACK' OR pricing_type = 'FIXED'),                                             -- 兜底只允许固定计价
+    CONSTRAINT ck_tariff_retired_timestamp CHECK ((status = 'RETIRED') = (retired_at IS NOT NULL))                                        -- 退役状态必须有边界时间
+);
+
+-- Revision high-water marks survive deletion of a SCHEDULED DRAFT revision.
+CREATE TABLE tariff_revision_counter (
+    family_id UUID PRIMARY KEY,
+    last_revision INTEGER NOT NULL CHECK (last_revision >= 0)
+);
+
+-- FIXED 使用唯一 00:00–24:00 FLAT period；TIME_OF_USE 的时段必须连续覆盖整日
+CREATE TABLE tariff_period (
+    tariff_plan_id UUID NOT NULL REFERENCES tariff_plan(id) ON DELETE RESTRICT,                                                          -- 所属不可变资费 revision
+    sequence_no INTEGER NOT NULL CHECK (sequence_no > 0),                                                                                -- 日内顺序
+    period_type VARCHAR(16) NOT NULL CHECK (period_type IN ('PEAK', 'FLAT', 'VALLEY')),                                                   -- 峰平谷
+    start_minute INTEGER NOT NULL CHECK (start_minute >= 0 AND start_minute < 1440),                                                     -- 本地日开始分钟
+    end_minute INTEGER NOT NULL CHECK (end_minute > 0 AND end_minute <= 1440),                                                          -- 本地日结束分钟，1440 表示 24:00
+    energy_price_per_kwh NUMERIC(20, 6) NOT NULL CHECK (energy_price_per_kwh >= 0),                                                      -- 电能单价
+    service_fee_per_kwh NUMERIC(20, 6) NOT NULL CHECK (service_fee_per_kwh >= 0),                                                       -- 服务费单价
+    PRIMARY KEY (tariff_plan_id, sequence_no),
+    CONSTRAINT ck_tariff_period_bounds CHECK (start_minute < end_minute)
+);
+
+-- 仅保留已关联交易且带累计电量的计费样本；event_id 抵御 Kafka 至少一次投递
+CREATE TABLE charging_meter_sample (
+    event_id UUID PRIMARY KEY,                                                                                                           -- 原始进度事件 ID，幂等键
+    transaction_id UUID NOT NULL REFERENCES charging_transaction(id) ON DELETE RESTRICT,                                                -- 已解析的真实充电交易
+    occurred_at TIMESTAMPTZ NOT NULL,                                                                                                    -- 设备读数时间
+    energy_kwh NUMERIC(20, 6) NOT NULL CHECK (energy_kwh >= 0),                                                                           -- 累计电量读数
+    power_kw NUMERIC(20, 6) CHECK (power_kw IS NULL OR power_kw >= 0),                                                                  -- 可选辅助诊断
+    state_of_charge INTEGER CHECK (state_of_charge IS NULL OR state_of_charge BETWEEN 0 AND 100),                                       -- 可选辅助诊断
+    protocol VARCHAR(64) NOT NULL,                                                                                                      -- 读数来源协议
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP                                                                           -- 入库时间
 );
 
 -- 已完成充电交易的不可变计费结果；它不是支付、退款或结算记录
-CREATE TABLE IF NOT EXISTS billing_record (
+CREATE TABLE billing_record (
     id UUID PRIMARY KEY,                                                                                                                   -- 账单主键 UUID
     tenant_id UUID NOT NULL REFERENCES tenant(id),                                                                                        -- 所属租户 ID
     transaction_id UUID NOT NULL REFERENCES charging_transaction(id),                                                                     -- 对应已完成充电交易，一笔交易只能生成一张账单
@@ -217,7 +248,7 @@ CREATE TABLE IF NOT EXISTS billing_record (
 );
 
 -- 账单可解释明细；MVP 写入电能费和服务费，后续可增加折扣或停车费等新类型
-CREATE TABLE IF NOT EXISTS billing_line_item (
+CREATE TABLE billing_line_item (
     id BIGSERIAL PRIMARY KEY,                                                                                                             -- 明细自增主键
     billing_record_id UUID NOT NULL REFERENCES billing_record(id) ON DELETE RESTRICT,                                                     -- 所属账单 ID
     line_no INTEGER NOT NULL CHECK (line_no > 0),                                                                                        -- 账单内稳定行序号
@@ -230,94 +261,33 @@ CREATE TABLE IF NOT EXISTS billing_line_item (
     CONSTRAINT uk_billing_line_item_no UNIQUE (billing_record_id, line_no)                                                               -- 同一账单内行号唯一
 );
 
--- 兼容已由早期 bootstrap 创建的本地数据库；正式版本将迁移到 Flyway 增量脚本。
-ALTER TABLE tenant ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE app_user ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE charging_station ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE charging_device ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE charging_connector ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE device_command ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
-ALTER TABLE device_command ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE device_command ADD COLUMN IF NOT EXISTS device_code VARCHAR(64);
-ALTER TABLE device_command ADD COLUMN IF NOT EXISTS connector_no VARCHAR(16);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS device_code VARCHAR(64);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS connector_no INTEGER;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS command_id UUID REFERENCES device_command(id);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS protocol VARCHAR(64);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS business_ref VARCHAR(128);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS start_meter_kwh NUMERIC(20, 6);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS end_meter_kwh NUMERIC(20, 6);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS latest_soc INTEGER;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS charging_duration_seconds BIGINT;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS total_amount NUMERIC(20, 6);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS stop_category VARCHAR(64);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS raw_stop_code INTEGER;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS raw_stop_detail VARCHAR(512);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS vehicle_vin VARCHAR(64);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS start_method VARCHAR(32);
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS last_progress_at TIMESTAMPTZ;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS final_record_received_at TIMESTAMPTZ;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS raw_final_record JSONB;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS additional_info JSONB NOT NULL DEFAULT '{}'::jsonb;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS start_time TIMESTAMPTZ;
-ALTER TABLE charging_transaction ADD COLUMN IF NOT EXISTS end_time TIMESTAMPTZ;
-UPDATE charging_transaction
-SET started_at = COALESCE(started_at, start_time),
-    ended_at = COALESCE(ended_at, end_time)
-WHERE start_time IS NOT NULL OR end_time IS NOT NULL;
-ALTER TABLE charging_transaction DROP COLUMN IF EXISTS start_time;
-ALTER TABLE charging_transaction DROP COLUMN IF EXISTS end_time;
-ALTER TABLE charging_transaction DROP CONSTRAINT IF EXISTS charging_transaction_status_check;
-ALTER TABLE charging_transaction ADD CONSTRAINT charging_transaction_status_check
-    CHECK (status IN ('STARTING', 'CHARGING', 'ENDING', 'COMPLETED', 'START_FAILED', 'ABORTED')) NOT VALID;
-
-CREATE INDEX IF NOT EXISTS idx_app_user_tenant_id ON app_user(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_station_tenant_id ON charging_station(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_device_tenant_station ON charging_device(tenant_id, station_id);
-CREATE INDEX IF NOT EXISTS idx_connector_device_id ON charging_connector(device_id);
-CREATE INDEX IF NOT EXISTS idx_command_device_status ON device_command(device_id, command_status);
-CREATE INDEX IF NOT EXISTS idx_command_expired_at ON device_command(expired_at);
-CREATE UNIQUE INDEX IF NOT EXISTS uk_command_active_stop_transaction
+CREATE INDEX idx_app_user_tenant_id ON app_user(tenant_id);
+CREATE INDEX idx_station_tenant_id ON charging_station(tenant_id);
+CREATE INDEX idx_device_tenant_station ON charging_device(tenant_id, station_id);
+CREATE INDEX idx_connector_device_id ON charging_connector(device_id);
+CREATE INDEX idx_command_device_status ON device_command(device_id, command_status);
+CREATE INDEX idx_command_expired_at ON device_command(expired_at);
+CREATE UNIQUE INDEX uk_command_active_stop_transaction
     ON device_command(command_type, business_ref)
     WHERE command_type = 'STOP_CHARGING'
       AND command_status IN ('CREATED', 'SENT', 'ACKED', 'EXECUTING');
-CREATE INDEX IF NOT EXISTS idx_transaction_connector_started_at ON charging_transaction(connector_id, started_at);
-CREATE INDEX IF NOT EXISTS idx_transaction_tenant ON charging_transaction(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_transaction_device_status ON charging_transaction(device_id, status);
-CREATE INDEX IF NOT EXISTS idx_transaction_started_at ON charging_transaction(started_at);
-CREATE INDEX IF NOT EXISTS idx_tariff_plan_effective ON tariff_plan(tenant_id, status, effective_from, effective_to);
-CREATE INDEX IF NOT EXISTS idx_billing_record_tenant_created ON billing_record(tenant_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_billing_line_item_record ON billing_line_item(billing_record_id, line_no);
-CREATE UNIQUE INDEX IF NOT EXISTS uk_transaction_protocol_device_trade
+CREATE INDEX idx_transaction_connector_started_at ON charging_transaction(connector_id, started_at);
+CREATE INDEX idx_transaction_tenant ON charging_transaction(tenant_id);
+CREATE INDEX idx_transaction_device_status ON charging_transaction(device_id, status);
+CREATE INDEX idx_transaction_started_at ON charging_transaction(started_at);
+CREATE INDEX idx_tariff_plan_effective ON tariff_plan(tenant_id, status, effective_from, effective_to);
+CREATE INDEX idx_tariff_plan_family ON tariff_plan(family_id, revision DESC);
+CREATE UNIQUE INDEX uk_tariff_fallback_family_per_tenant
+    ON tariff_plan(tenant_id) WHERE role = 'FALLBACK' AND revision = 1;
+CREATE UNIQUE INDEX uk_tariff_fallback_open_revision_per_tenant
+    ON tariff_plan(tenant_id) WHERE role = 'FALLBACK' AND effective_to IS NULL;
+CREATE INDEX idx_tariff_period_start ON tariff_period(tariff_plan_id, start_minute);
+CREATE INDEX idx_meter_sample_transaction_time ON charging_meter_sample(transaction_id, occurred_at);
+CREATE INDEX idx_billing_record_tenant_created ON billing_record(tenant_id, created_at DESC);
+CREATE INDEX idx_billing_line_item_record ON billing_line_item(billing_record_id, line_no);
+CREATE UNIQUE INDEX uk_transaction_protocol_device_trade
     ON charging_transaction(protocol, device_id, protocol_transaction_id)
     WHERE protocol_transaction_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uk_transaction_active_connector
+CREATE UNIQUE INDEX uk_transaction_active_connector
     ON charging_transaction(connector_id)
     WHERE status IN ('STARTING', 'CHARGING', 'ENDING');
-
-INSERT INTO schema_version(version, description)
-VALUES ('001', 'Initial VoltBridge schema')
-ON CONFLICT (version) DO NOTHING;
-
-INSERT INTO schema_version(version, description)
-VALUES ('002', 'Architecture constraints and optimistic-lock columns')
-ON CONFLICT (version) DO NOTHING;
-
-INSERT INTO schema_version(version, description)
-VALUES ('006', 'Charging transaction lifecycle, protocol correlation and final record')
-ON CONFLICT (version) DO NOTHING;
-
-INSERT INTO schema_version(version, description)
-VALUES ('007', 'Remote stop lifecycle and active stop command idempotency')
-ON CONFLICT (version) DO NOTHING;
-
-INSERT INTO schema_version(version, description)
-VALUES ('008', 'Protocol-neutral device initiated transaction and durable numeric id allocation')
-ON CONFLICT (version) DO NOTHING;
-
-INSERT INTO schema_version(version, description)
-VALUES ('009', 'Billing MVP tariff plans, immutable billing records and line items')
-ON CONFLICT (version) DO NOTHING;

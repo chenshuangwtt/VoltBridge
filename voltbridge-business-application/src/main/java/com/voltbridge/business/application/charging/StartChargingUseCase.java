@@ -1,6 +1,8 @@
 package com.voltbridge.business.application.charging;
 
 import com.voltbridge.business.domain.command.DeviceCommand;
+import com.voltbridge.business.application.command.DeviceCommandFailure;
+import com.voltbridge.business.application.device.DeviceOperationPreconditions;
 import com.voltbridge.business.domain.command.DeviceCommandRepository;
 import com.voltbridge.business.domain.command.DeviceCommandType;
 import com.voltbridge.business.domain.connector.Connector;
@@ -43,6 +45,7 @@ public class StartChargingUseCase {
     private final ConnectorRepository connectorRepository;
     private final DeviceCommandRepository commandRepository;
     private final ChargingTransactionRepository transactionRepository;
+    private final DeviceOperationPreconditions operationPreconditions;
     private final DeviceCommandGateway commandGateway;
     private final TimeProvider timeProvider;
     private final Duration remoteStartTimeout;
@@ -51,6 +54,7 @@ public class StartChargingUseCase {
                                 ConnectorRepository connectorRepository,
                                 DeviceCommandRepository commandRepository,
                                 ChargingTransactionRepository transactionRepository,
+                                DeviceOperationPreconditions operationPreconditions,
                                 DeviceCommandGateway commandGateway,
                                 TimeProvider timeProvider,
                                 @Value("${voltbridge.device.command.remote-start-timeout:PT30S}")
@@ -59,6 +63,7 @@ public class StartChargingUseCase {
         this.connectorRepository = connectorRepository;
         this.commandRepository = commandRepository;
         this.transactionRepository = transactionRepository;
+        this.operationPreconditions = operationPreconditions;
         this.commandGateway = commandGateway;
         this.timeProvider = timeProvider;
         this.remoteStartTimeout = remoteStartTimeout;
@@ -69,11 +74,19 @@ public class StartChargingUseCase {
         // 阶段一：验证业务对象和请求约束，此时尚未创建命令或发送设备报文。
         ChargingDevice device = deviceRepository.findByDeviceCode(deviceCode)
                 .orElseThrow(() -> new VoltBridgeException("DEVICE_NOT_FOUND", "Device not found: " + deviceCode));
+        operationPreconditions.requireDeviceEnabled(device);
+        operationPreconditions.requireOnline(device);
         int parsedConnectorNo = parseConnectorNo(connectorNo);
         Connector connector = connectorRepository.findByDeviceIdAndConnectorNo(device.id(), parsedConnectorNo)
                 .orElseThrow(() -> new VoltBridgeException("CONNECTOR_NOT_FOUND",
                         "Connector not found: " + deviceCode + "/" + connectorNo));
+        operationPreconditions.requireConnectorBusinessAvailable(connector);
         validateRequest(limitAmount, logicalCardNo, physicalCardNo, businessRef);
+        if (transactionRepository.findActiveByDeviceAndConnector(device.id(), connector.id()).isPresent()) {
+            throw new VoltBridgeException("ACTIVE_TRANSACTION_EXISTS",
+                    "Connector already has an active charging transaction: " + deviceCode + "/" + connectorNo);
+        }
+        operationPreconditions.requireConnectorRuntimeAvailable(device, parsedConnectorNo);
 
         // 阶段二：先持久化 CREATED 命令和 STARTING 交易，避免设备快速响应时找不到业务关联。
         Instant now = timeProvider.now();
@@ -88,7 +101,10 @@ public class StartChargingUseCase {
         try {
             transactionRepository.save(transaction);
         } catch (RuntimeException exception) {
-            command.markFailed("TRANSACTION_CREATE_FAILED", exception.getMessage(), "{}", timeProvider.now());
+            LOGGER.error("ChargingTransaction persistence failed during start: commandId={}, deviceCode={}, connectorNo={}",
+                    command.id(), deviceCode, normalizedConnectorNo, exception);
+            command.markFailed(DeviceCommandFailure.code(exception, "TRANSACTION_CREATE_FAILED"),
+                    DeviceCommandFailure.reason(exception), "{}", timeProvider.now());
             commandRepository.save(command);
             throw exception;
         }
@@ -107,7 +123,7 @@ public class StartChargingUseCase {
             dispatch.whenComplete((ignored, error) -> updateDispatchResult(command.id(), error));
         } catch (RuntimeException exception) {
             failBeforeDispatch(command, exception);
-            failTransaction(command.id(), exception.getMessage());
+            failTransaction(command.id(), DeviceCommandFailure.reason(exception));
             throw exception;
         }
         return command.id();
@@ -130,14 +146,13 @@ public class StartChargingUseCase {
             return;
         }
         Throwable cause = unwrap(error);
-        String code = cause instanceof VoltBridgeException exception
-                ? exception.code() : "TRANSPORT_WRITE_FAILED";
+        String code = DeviceCommandFailure.code(cause, "TRANSPORT_WRITE_FAILED");
+        String reason = DeviceCommandFailure.reason(cause);
         // 路由/编码/写出失败意味着命令未被设备可靠接收，启动交易也不能继续等待充电证据。
-        if (command.markFailed(code, cause.getMessage(), "{}", now)) {
+        if (command.markFailed(code, reason, "{}", now)) {
             commandRepository.save(command);
-            failTransaction(command.id(), cause.getMessage());
-            LOGGER.warn("DeviceCommand send failed: commandId={}, deviceCode={}, connectorNo={}, code={}, reason={}",
-                    command.id(), command.deviceCode(), command.connectorNo(), code, cause.getMessage());
+            failTransaction(command.id(), reason);
+            DeviceCommandFailure.log(LOGGER, "DeviceCommand send failed", command.id(), code, cause);
         }
     }
 
@@ -150,12 +165,10 @@ public class StartChargingUseCase {
     }
 
     private void failBeforeDispatch(DeviceCommand command, RuntimeException exception) {
-        String code = exception instanceof VoltBridgeException voltBridgeException
-                ? voltBridgeException.code() : "DISPATCH_FAILED";
-        command.markFailed(code, exception.getMessage(), "{}", timeProvider.now());
+        String code = DeviceCommandFailure.code(exception, "DISPATCH_FAILED");
+        command.markFailed(code, DeviceCommandFailure.reason(exception), "{}", timeProvider.now());
         commandRepository.save(command);
-        LOGGER.warn("DeviceCommand dispatch rejected: commandId={}, deviceCode={}, connectorNo={}, code={}",
-                command.id(), command.deviceCode(), command.connectorNo(), code);
+        DeviceCommandFailure.log(LOGGER, "DeviceCommand dispatch rejected", command.id(), code, exception);
     }
 
     private int parseConnectorNo(String connectorNo) {

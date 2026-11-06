@@ -2,6 +2,8 @@ package com.voltbridge.bootstrap;
 
 import com.voltbridge.business.application.charging.StartChargingUseCase;
 import com.voltbridge.business.application.charging.StopChargingUseCase;
+import com.voltbridge.business.application.device.DeviceOperationPreconditions;
+import com.voltbridge.business.application.device.HandleConnectorStatusUseCase;
 import com.voltbridge.business.application.command.HandleCommandResultUseCase;
 import com.voltbridge.business.application.device.HandleDeviceConnectedUseCase;
 import com.voltbridge.business.application.device.HandleDeviceDisconnectedUseCase;
@@ -36,6 +38,7 @@ import com.voltbridge.gateway.session.LocalDeviceSessionRegistry;
 import com.voltbridge.gateway.session.LocalGatewayConnectionCoordinator;
 import com.voltbridge.infra.cache.CaffeineDeviceRouteDirectory;
 import com.voltbridge.infra.cache.CaffeineDeviceRuntimeStateStore;
+import com.voltbridge.infra.cache.CaffeineConnectorRuntimeStateStore;
 import com.voltbridge.infra.messaging.memory.InMemoryDeviceEventPublisher;
 import com.voltbridge.protocol.common.codec.HexCodec;
 import com.voltbridge.protocol.common.codec.BcdCodec;
@@ -101,9 +104,14 @@ class YunKuaiChongRemoteStartTcpIntegrationTest {
         InMemoryCommandRepository commands = new InMemoryCommandRepository();
         InMemoryChargingTransactionRepository transactions = new InMemoryChargingTransactionRepository();
         CaffeineDeviceRuntimeStateStore runtimeStates = new CaffeineDeviceRuntimeStateStore();
+        CaffeineConnectorRuntimeStateStore connectorRuntimeStates = new CaffeineConnectorRuntimeStateStore();
+        DeviceOperationPreconditions operationPreconditions = new DeviceOperationPreconditions(
+                runtimeStates, connectorRuntimeStates);
         HandleDeviceConnectedUseCase connected = new HandleDeviceConnectedUseCase(devices, runtimeStates);
         HandleDeviceDisconnectedUseCase disconnected = new HandleDeviceDisconnectedUseCase(
                 runtimeStates, DeviceRuntimeMetrics.NOOP);
+        HandleConnectorStatusUseCase connectorStatuses = new HandleConnectorStatusUseCase(
+                connectorRuntimeStates, DeviceRuntimeMetrics.NOOP);
         HandleCommandResultUseCase commandResults = new HandleCommandResultUseCase(commands);
         ChargingTransactionResolver transactionResolver = new ChargingTransactionResolver(
                 devices, connectors, transactions);
@@ -111,7 +119,8 @@ class YunKuaiChongRemoteStartTcpIntegrationTest {
         HandleTransactionCommandResultUseCase transactionCommandResults =
                 new HandleTransactionCommandResultUseCase(transactions);
         HandleTransactionProgressUseCase transactionProgress =
-                new HandleTransactionProgressUseCase(transactionResolver, chargingStarted);
+                new HandleTransactionProgressUseCase(transactionResolver, chargingStarted,
+                        new NoOpChargingMeterSampleRepository());
         HandleChargingEndedUseCase chargingEnded =
                 new HandleChargingEndedUseCase(transactionResolver, transactions, commands);
         HandleTransactionRecordUseCase transactionRecords =
@@ -119,7 +128,7 @@ class YunKuaiChongRemoteStartTcpIntegrationTest {
         List<DeviceEvent> events = new CopyOnWriteArrayList<>();
         DeviceEventHandler<DeviceEvent> recorder = events::add;
         DeviceEventDispatcher eventDispatcher = new DeviceEventDispatcher(
-                new InMemoryDeviceEventPublisher(List.of(connected, disconnected, commandResults,
+                new InMemoryDeviceEventPublisher(List.of(connected, disconnected, connectorStatuses, commandResults,
                         transactionCommandResults, transactionProgress, chargingEnded,
                         transactionRecords, recorder)));
 
@@ -155,11 +164,13 @@ class YunKuaiChongRemoteStartTcpIntegrationTest {
                 sessions, routes, protocolRegistry, connected, eventDispatcher,
                 timeProvider, "integration-node", Duration.ofMinutes(10));
         StartChargingUseCase startCharging = new StartChargingUseCase(devices, connectors, commands, transactions,
+                operationPreconditions,
                 new com.voltbridge.gateway.command.DeviceCommandDispatcher(
                         new com.voltbridge.gateway.routing.DeviceRouter(routes, timeProvider),
                         sessions, protocolRegistry),
                 timeProvider, Duration.ofSeconds(5));
-        StopChargingUseCase stopCharging = new StopChargingUseCase(devices, connectors, transactions, commands,
+        StopChargingUseCase stopCharging = new StopChargingUseCase(devices, connectors, transactions,
+                operationPreconditions, commands,
                 new com.voltbridge.gateway.command.DeviceCommandDispatcher(
                         new com.voltbridge.gateway.routing.DeviceRouter(routes, timeProvider),
                         sessions, protocolRegistry),
@@ -293,6 +304,17 @@ class YunKuaiChongRemoteStartTcpIntegrationTest {
             System.out.println("INTEGRATION_REMOTE_START_RESULT_0X33=" + HexCodec.encode(resultFrame));
             System.out.println("INTEGRATION_REMOTE_STOP_0X36=" + HexCodec.encode(remoteStopBytes));
             System.out.println("INTEGRATION_REMOTE_STOP_RESULT_0X35=" + HexCodec.encode(stopResultFrame));
+
+            // 最终记录完成后先上报枪口空闲，再启动第二笔交易验证 0x35 拒绝。
+            byte[] availablePayload = realtimePayload(tradeNo);
+            Arrays.fill(availablePayload, 0, 16, (byte) 0);
+            availablePayload[24] = 0x02;
+            availablePayload[26] = 0x00;
+            output.write(frameCodec.encode(10, 0, 0x13, availablePayload));
+            output.flush();
+            await(() -> connectorRuntimeStates.findConnector(deviceId, 1)
+                    .map(state -> state.status() == com.voltbridge.device.model.ConnectorStatus.AVAILABLE)
+                    .orElse(false));
 
             // 在同一真实连接上启动第二笔交易，验证 0x35 拒绝不会改变 CHARGING 交易。
             UUID failedStopStartCommandId = startCharging.execute(DEVICE_CODE, "01", new BigDecimal("20.00"),
@@ -492,7 +514,8 @@ class YunKuaiChongRemoteStartTcpIntegrationTest {
         private final UUID id = UUID.randomUUID();
         private final UUID tenantId = UUID.randomUUID();
         private final UUID stationId = UUID.randomUUID();
-        private final AtomicReference<String> status = new AtomicReference<>("REGISTERED");
+        private final AtomicReference<com.voltbridge.business.domain.device.DeviceBusinessStatus> status =
+                new AtomicReference<>(com.voltbridge.business.domain.device.DeviceBusinessStatus.ENABLED);
 
         private ChargingDevice device() {
             Instant now = Instant.now();
@@ -511,11 +534,13 @@ class YunKuaiChongRemoteStartTcpIntegrationTest {
         }
 
         @Override
-        public boolean updateStatus(String deviceCode, String newStatus, Instant updatedAt) {
+        public boolean updateBusinessStatus(String deviceCode,
+                                            com.voltbridge.business.domain.device.DeviceBusinessStatus businessStatus,
+                                            Instant updatedAt) {
             if (!DEVICE_CODE.equals(deviceCode)) {
                 return false;
             }
-            status.set(newStatus);
+            status.set(businessStatus);
             return true;
         }
     }

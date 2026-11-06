@@ -7,5 +7,6 @@ import java.util.UUID;
 public interface BillingRecordRepository {
     Optional<BillingRecord> findById(UUID id);
     Optional<BillingRecord> findByTransactionId(UUID transactionId);
+    boolean existsByTariffPlanId(UUID tariffPlanId);
     BillingRecord saveIfAbsent(BillingRecord billingRecord);
 }

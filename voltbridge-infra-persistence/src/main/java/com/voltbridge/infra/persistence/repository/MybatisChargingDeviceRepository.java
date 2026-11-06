@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.voltbridge.business.domain.device.ChargingDevice;
 import com.voltbridge.business.domain.device.ChargingDeviceRepository;
+import com.voltbridge.business.domain.device.DeviceBusinessStatus;
 import com.voltbridge.device.model.DeviceProtocol;
 import com.voltbridge.infra.persistence.entity.ChargingDeviceEntity;
 import com.voltbridge.infra.persistence.mapper.ChargingDeviceMapper;
@@ -35,10 +36,10 @@ public class MybatisChargingDeviceRepository implements ChargingDeviceRepository
     }
 
     @Override
-    public boolean updateStatus(String deviceCode, String status, Instant updatedAt) {
+    public boolean updateBusinessStatus(String deviceCode, DeviceBusinessStatus businessStatus, Instant updatedAt) {
         return mapper.update(new UpdateWrapper<ChargingDeviceEntity>()
                 .eq("device_code", deviceCode)
-                .set("status", status)
+                .set("business_status", businessStatus.name())
                 .set("updated_at", updatedAt)
                 .setSql("version = version + 1")) > 0;
     }
@@ -46,7 +47,7 @@ public class MybatisChargingDeviceRepository implements ChargingDeviceRepository
     private ChargingDevice toDomain(ChargingDeviceEntity entity) {
         return new ChargingDevice(entity.id, entity.tenantId, entity.stationId,
                 entity.deviceCode, entity.deviceName, DeviceProtocol.valueOf(entity.protocol),
-                entity.protocolVersion, entity.status, entity.createdAt, entity.updatedAt,
+                entity.protocolVersion, entity.businessStatus, entity.createdAt, entity.updatedAt,
                 entity.version == null ? 0 : entity.version);
     }
 }

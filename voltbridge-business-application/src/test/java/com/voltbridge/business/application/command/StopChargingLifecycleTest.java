@@ -1,6 +1,7 @@
 package com.voltbridge.business.application.command;
 
 import com.voltbridge.business.application.charging.StopChargingUseCase;
+import com.voltbridge.business.application.device.DeviceOperationPreconditions;
 import com.voltbridge.business.application.transaction.ChargingTransactionResolver;
 import com.voltbridge.business.application.transaction.HandleChargingEndedUseCase;
 import com.voltbridge.business.domain.command.DeviceCommand;
@@ -10,6 +11,7 @@ import com.voltbridge.business.domain.command.DeviceCommandType;
 import com.voltbridge.business.domain.connector.Connector;
 import com.voltbridge.business.domain.connector.ConnectorRepository;
 import com.voltbridge.business.domain.device.ChargingDevice;
+import com.voltbridge.business.domain.device.DeviceBusinessStatus;
 import com.voltbridge.business.domain.device.ChargingDeviceRepository;
 import com.voltbridge.business.domain.transaction.ChargingTransaction;
 import com.voltbridge.business.domain.transaction.ChargingTransactionRepository;
@@ -22,7 +24,11 @@ import com.voltbridge.device.event.CommandResultEvent;
 import com.voltbridge.device.event.CommandResultStatus;
 import com.voltbridge.device.model.DeviceId;
 import com.voltbridge.device.model.DeviceProtocol;
+import com.voltbridge.device.model.DeviceOnlineStatus;
 import com.voltbridge.device.port.DeviceCommandGateway;
+import com.voltbridge.device.port.ConnectorRuntimeStateStore;
+import com.voltbridge.device.port.DeviceRuntimeStateStore;
+import com.voltbridge.device.runtime.DeviceRuntimeState;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -70,6 +76,7 @@ class StopChargingLifecycleTest {
         assertThat(fixture.transaction.status()).isEqualTo(ChargingTransactionStatus.ENDING);
         assertThat(fixture.commands.findById(commandId).orElseThrow().status())
                 .isEqualTo(DeviceCommandStatus.SUCCEEDED);
+        assertThat(fixture.device.businessStatus()).isEqualTo(DeviceBusinessStatus.ENABLED);
     }
 
     @Test
@@ -99,19 +106,21 @@ class StopChargingLifecycleTest {
     }
 
     @Test
-    void offlineStopPersistsExplicitFailureAndKeepsTransactionCharging() {
+    void offlineStopIsRejectedWithoutCommandAndKeepsTransactionCharging() {
         Fixture fixture = new Fixture(command -> {
             throw new VoltBridgeException("DEVICE_OFFLINE", "Device session is unavailable");
         });
+        org.mockito.Mockito.when(fixture.deviceRuntimeStates.find(new DeviceId(DEVICE_CODE)))
+                .thenReturn(Optional.of(new DeviceRuntimeState(new DeviceId(DEVICE_CODE),
+                        DeviceOnlineStatus.OFFLINE, "stop-test-session", fixture.time.now(),
+                        fixture.time.now(), fixture.time.now())));
 
         assertThatThrownBy(() -> fixture.useCase.execute(DEVICE_CODE, "01"))
                 .isInstanceOf(VoltBridgeException.class)
                 .extracting("code").isEqualTo("DEVICE_OFFLINE");
-        assertThat(fixture.commands.values()).singleElement().satisfies(command -> {
-            assertThat(command.status()).isEqualTo(DeviceCommandStatus.FAILED);
-            assertThat(command.failureCode()).isEqualTo("DEVICE_OFFLINE");
-        });
+        assertThat(fixture.commands.values()).isEmpty();
         assertThat(fixture.transaction.status()).isEqualTo(ChargingTransactionStatus.CHARGING);
+        assertThat(fixture.dispatchCount.get()).isZero();
     }
 
     private static CommandResultEvent result(UUID commandId, CommandResultStatus status,
@@ -139,6 +148,10 @@ class StopChargingLifecycleTest {
         private final FixedConnectorRepository connectors;
         private final InMemoryCommandRepository commands = new InMemoryCommandRepository();
         private final InMemoryTransactionRepository transactions = new InMemoryTransactionRepository();
+        private final DeviceRuntimeStateStore deviceRuntimeStates =
+                org.mockito.Mockito.mock(DeviceRuntimeStateStore.class);
+        private final ConnectorRuntimeStateStore connectorRuntimeStates =
+                org.mockito.Mockito.mock(ConnectorRuntimeStateStore.class);
         private final ChargingTransaction transaction;
         private final AtomicInteger dispatchCount = new AtomicInteger();
         private final StopChargingUseCase useCase;
@@ -148,7 +161,10 @@ class StopChargingLifecycleTest {
             UUID deviceId = UUID.randomUUID();
             UUID stationId = UUID.randomUUID();
             device = new ChargingDevice(deviceId, tenantId, stationId, DEVICE_CODE, "Stop Test Device",
-                    DeviceProtocol.YUN_KUAI_CHONG_150, "1.5", "ONLINE", time.now(), time.now(), 0);
+                    DeviceProtocol.YUN_KUAI_CHONG_150, "1.5", DeviceBusinessStatus.ENABLED, time.now(), time.now(), 0);
+            org.mockito.Mockito.when(deviceRuntimeStates.find(new DeviceId(DEVICE_CODE))).thenReturn(Optional.of(
+                    new DeviceRuntimeState(new DeviceId(DEVICE_CODE), DeviceOnlineStatus.ONLINE,
+                            "stop-test-session", time.now(), time.now(), null)));
             connector = new Connector(UUID.randomUUID(), tenantId, stationId, deviceId, 1,
                     "CONNECTOR-01", "DC", new BigDecimal("120"), "CHARGING", time.now(), time.now());
             devices = new FixedDeviceRepository(device);
@@ -163,7 +179,8 @@ class StopChargingLifecycleTest {
                 assertThat(command).isInstanceOf(StopChargingCommand.class);
                 return gateway.dispatch(command);
             };
-            useCase = new StopChargingUseCase(devices, connectors, transactions, commands,
+            useCase = new StopChargingUseCase(devices, connectors, transactions,
+                    new DeviceOperationPreconditions(deviceRuntimeStates, connectorRuntimeStates), commands,
                     countingGateway, time, Duration.ofSeconds(5));
         }
     }
@@ -244,7 +261,7 @@ class StopChargingLifecycleTest {
     private record FixedDeviceRepository(ChargingDevice device) implements ChargingDeviceRepository {
         @Override public Optional<ChargingDevice> findById(UUID id) { return device.id().equals(id) ? Optional.of(device) : Optional.empty(); }
         @Override public Optional<ChargingDevice> findByDeviceCode(String code) { return device.deviceCode().equals(code) ? Optional.of(device) : Optional.empty(); }
-        @Override public boolean updateStatus(String code, String status, Instant updatedAt) { return false; }
+        @Override public boolean updateBusinessStatus(String code, DeviceBusinessStatus businessStatus, Instant updatedAt) { return false; }
     }
 
     private record FixedConnectorRepository(Connector connector) implements ConnectorRepository {

@@ -12,6 +12,8 @@ import org.springframework.stereotype.Repository;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -50,6 +52,15 @@ public class CaffeineConnectorRuntimeStateStore implements ConnectorRuntimeState
     @Override
     public Optional<ConnectorRuntimeState> findConnector(DeviceId deviceId, int connectorNo) {
         return Optional.ofNullable(connectorStates.getIfPresent(new ConnectorKey(deviceId, connectorNo)));
+    }
+
+    @Override
+    public List<ConnectorRuntimeState> findConnectors(DeviceId deviceId) {
+        return connectorStates.asMap().entrySet().stream()
+                .filter(entry -> entry.getKey().deviceId().equals(deviceId))
+                .map(java.util.Map.Entry::getValue)
+                .sorted(Comparator.comparingInt(ConnectorRuntimeState::connectorNo))
+                .toList();
     }
 
     @Override

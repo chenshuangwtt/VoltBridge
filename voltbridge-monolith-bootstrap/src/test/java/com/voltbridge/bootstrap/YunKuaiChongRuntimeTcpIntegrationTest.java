@@ -235,7 +235,7 @@ class YunKuaiChongRuntimeTcpIntegrationTest {
     private static final class RegisteredDeviceRepository implements ChargingDeviceRepository {
         private final ChargingDevice device = new ChargingDevice(UUID.randomUUID(), UUID.randomUUID(),
                 UUID.randomUUID(), DEVICE_CODE, "Runtime Test Device", DeviceProtocol.YUN_KUAI_CHONG_150,
-                "1.5", "REGISTERED", Instant.now(), Instant.now(), 0);
+                "1.5", com.voltbridge.business.domain.device.DeviceBusinessStatus.ENABLED, Instant.now(), Instant.now(), 0);
 
         @Override
         public Optional<ChargingDevice> findById(UUID id) {
@@ -248,7 +248,7 @@ class YunKuaiChongRuntimeTcpIntegrationTest {
         }
 
         @Override
-        public boolean updateStatus(String deviceCode, String status, Instant updatedAt) {
+        public boolean updateBusinessStatus(String deviceCode, com.voltbridge.business.domain.device.DeviceBusinessStatus businessStatus, Instant updatedAt) {
             return false;
         }
     }

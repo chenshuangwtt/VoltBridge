@@ -13,5 +13,5 @@ public interface ChargingDeviceRepository {
 
     Optional<ChargingDevice> findByDeviceCode(String deviceCode);
 
-    boolean updateStatus(String deviceCode, String status, Instant updatedAt);
+    boolean updateBusinessStatus(String deviceCode, DeviceBusinessStatus businessStatus, Instant updatedAt);
 }

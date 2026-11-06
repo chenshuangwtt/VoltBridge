@@ -19,4 +19,4 @@
 | Get/ChangeConfiguration | CS -> CP | 参数读取/更新 | SOURCE_NOT_VERIFIED | — | 配置子模型 | RECOMMENDED | HIGH | contract + persistence + integration | 待验证 |
 | Diagnostics/Firmware/DataTransfer | 双向 | 运维/厂商扩展 | SOURCE_NOT_VERIFIED | — | 协议专用 | SKIP_FOR_NOW | HIGH | 专项基础设施 | 不能凭名称推断实现 |
 
-汇总：已验证 inventory 为 8 个核心 action，全部 IMPLEMENTED；另有 6 组常见 action 仅作为 `SOURCE_NOT_VERIFIED` 候选，不进入覆盖率分母。测试缺口是没有 OCPP 分布式服务拆分场景及未实现运维 action 的规范测试。
+汇总：已验证 inventory 为 8 个核心 action，全部 IMPLEMENTED；另有 6 组常见 action 仅作为 `SOURCE_NOT_VERIFIED` 候选，不进入覆盖率分母。Full Distributed E2E 已覆盖 OCPP 1.6J 的独立 Gateway、WebSocket 设备连接、交易、Kafka 回流和 Billing 闭环。尚未自动化覆盖的是 Gateway 强制崩溃后的 TTL 恢复、Redis outage/chaos，以及未实现运维 action 的规范测试。

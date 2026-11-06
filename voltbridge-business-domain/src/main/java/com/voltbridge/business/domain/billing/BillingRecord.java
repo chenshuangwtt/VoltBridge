@@ -23,6 +23,13 @@ public record BillingRecord(UUID id, UUID tenantId, UUID transactionId, UUID tar
         discountAmount = BillingDecimalPolicy.money(discountAmount); totalAmount = BillingDecimalPolicy.money(totalAmount);
         status = Objects.requireNonNull(status); pricingSnapshot = Objects.requireNonNull(pricingSnapshot);
         lineItems = List.copyOf(lineItems); createdAt = Objects.requireNonNull(createdAt); finalizedAt = Objects.requireNonNull(finalizedAt);
+        BigDecimal lineTotal = lineItems.stream().map(BillingLineItem::amount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add).setScale(BillingDecimalPolicy.MONEY_SCALE);
+        if (energyFee.add(serviceFee).compareTo(subtotalAmount) != 0
+                || subtotalAmount.subtract(discountAmount).compareTo(totalAmount) != 0
+                || lineTotal.compareTo(subtotalAmount) != 0) {
+            throw new IllegalArgumentException("Billing totals must equal the immutable line item totals");
+        }
     }
 
     public static BillingRecord finalized(UUID tenantId, UUID transactionId, TariffPlan tariffPlan,

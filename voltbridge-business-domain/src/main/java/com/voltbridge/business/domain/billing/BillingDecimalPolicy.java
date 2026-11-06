@@ -14,6 +14,8 @@ public final class BillingDecimalPolicy {
     public static final int UNIT_PRICE_SCALE = 6;
     public static final int MONEY_SCALE = 2;
     public static final RoundingMode ROUNDING_MODE = RoundingMode.HALF_UP;
+    /** Cumulative meter reconciliation tolerance, expressed in kWh. */
+    public static final BigDecimal METER_ENERGY_TOLERANCE = new BigDecimal("0.001000");
 
     private BillingDecimalPolicy() {
     }

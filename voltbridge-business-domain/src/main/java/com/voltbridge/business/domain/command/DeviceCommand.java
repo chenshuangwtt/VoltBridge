@@ -149,7 +149,7 @@ public class DeviceCommand {
         }
         status = DeviceCommandStatus.FAILED;
         failureCode = code;
-        failureReason = reason;
+        failureReason = DeviceCommandFailureReason.normalize(reason);
         responsePayload = response;
         completedAt = now;
         updatedAt = now;
@@ -164,7 +164,7 @@ public class DeviceCommand {
         }
         status = DeviceCommandStatus.FAILED;
         failureCode = code;
-        failureReason = reason;
+        failureReason = DeviceCommandFailureReason.normalize(reason);
         responsePayload = response;
         ackedAt = now;
         completedAt = now;

@@ -139,7 +139,8 @@ class YunKuaiChongLoginTcpIntegrationTest {
 
     private static final class InMemoryChargingDeviceRepository implements ChargingDeviceRepository {
 
-        private final AtomicReference<String> status = new AtomicReference<>("REGISTERED");
+        private final AtomicReference<com.voltbridge.business.domain.device.DeviceBusinessStatus> status =
+                new AtomicReference<>(com.voltbridge.business.domain.device.DeviceBusinessStatus.ENABLED);
         private final AtomicInteger lookupCount = new AtomicInteger();
 
         @Override
@@ -160,11 +161,13 @@ class YunKuaiChongLoginTcpIntegrationTest {
         }
 
         @Override
-        public boolean updateStatus(String deviceCode, String newStatus, Instant updatedAt) {
+        public boolean updateBusinessStatus(String deviceCode,
+                                            com.voltbridge.business.domain.device.DeviceBusinessStatus businessStatus,
+                                            Instant updatedAt) {
             if (!DEVICE_CODE.equals(deviceCode)) {
                 return false;
             }
-            status.set(newStatus);
+            status.set(businessStatus);
             return true;
         }
 
@@ -172,7 +175,7 @@ class YunKuaiChongLoginTcpIntegrationTest {
             return lookupCount.get();
         }
 
-        String status() {
+        com.voltbridge.business.domain.device.DeviceBusinessStatus businessStatus() {
             return status.get();
         }
     }

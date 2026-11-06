@@ -93,4 +93,4 @@ sequenceDiagram
 
 ## 扩展方式
 
-`YunKuaiChongCommandRouter` 按命令号注册 `YunKuaiChongCommandHandler`。后续心跳、远程启动结果、充电进度和交易记录各自新增处理器，不修改巨型 `switch`。统一下行命令仍通过 `ProtocolAdapter.encode` 扩展，本阶段未实现 Remote Start。
+`YunKuaiChongCommandRouter` 按命令号注册 `YunKuaiChongCommandHandler`。心跳、远程启动结果、充电进度和交易记录各自使用独立处理器，不修改巨型 `switch`。RemoteStart 的当前流程见[云快充远程启动](../protocol/yunkuaichong-v150-remote-start.md)；新增下行能力仍通过 `ProtocolAdapter.encode` 扩展。

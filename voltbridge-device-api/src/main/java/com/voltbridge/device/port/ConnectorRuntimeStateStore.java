@@ -7,6 +7,7 @@ import com.voltbridge.device.runtime.ChargingProgressSnapshot;
 import com.voltbridge.device.runtime.ConnectorRuntimeState;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 public interface ConnectorRuntimeStateStore {
@@ -17,6 +18,8 @@ public interface ConnectorRuntimeStateStore {
     ChargingProgressSnapshot recordProgress(ChargingProgressEvent event);
 
     Optional<ConnectorRuntimeState> findConnector(DeviceId deviceId, int connectorNo);
+
+    List<ConnectorRuntimeState> findConnectors(DeviceId deviceId);
 
     Optional<ChargingProgressSnapshot> findProgress(DeviceId deviceId, int connectorNo);
 }

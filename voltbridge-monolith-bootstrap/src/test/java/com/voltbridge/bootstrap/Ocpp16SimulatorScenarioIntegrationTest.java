@@ -5,6 +5,8 @@ import com.voltbridge.business.application.charging.StartChargingUseCase;
 import com.voltbridge.business.application.charging.StopChargingUseCase;
 import com.voltbridge.business.application.command.HandleCommandResultUseCase;
 import com.voltbridge.business.application.device.FindChargingDeviceUseCase;
+import com.voltbridge.business.application.device.DeviceOperationPreconditions;
+import com.voltbridge.business.application.device.FindDeviceOperationCapabilitiesUseCase;
 import com.voltbridge.business.application.device.HandleChargingProgressUseCase;
 import com.voltbridge.business.application.device.HandleConnectorStatusUseCase;
 import com.voltbridge.business.application.device.HandleDeviceConnectedUseCase;
@@ -29,6 +31,8 @@ import com.voltbridge.business.web.device.DeviceController;
 import com.voltbridge.common.time.TimeProvider;
 import com.voltbridge.device.event.DeviceEvent;
 import com.voltbridge.device.model.DeviceProtocol;
+import com.voltbridge.device.model.DeviceId;
+import com.voltbridge.device.model.ConnectorStatus;
 import com.voltbridge.device.port.DeviceEventHandler;
 import com.voltbridge.device.port.DeviceRuntimeMetrics;
 import com.voltbridge.gateway.command.DeviceCommandDispatcher;
@@ -103,12 +107,16 @@ class Ocpp16SimulatorScenarioIntegrationTest {
         ScenarioFixture fixture = ScenarioFixture.start();
         try (Ocpp16Simulator simulator = fixture.simulator()) {
             ScenarioResult result = new ChargingScenarioRunner().runRemoteStartScenario(simulator,
-                    config("ocpp-remote-start-remote-stop", CompletionMode.REMOTE_STOP), fixture.control());
+                    config("ocpp-remote-start-remote-stop", CompletionMode.REMOTE_STOP), fixture.control(), false);
             assertThat(fixture.commands.findById(result.stopCommandId()).orElseThrow().status()).isEqualTo(DeviceCommandStatus.SUCCEEDED);
             assertThat(fixture.transactions.findById(result.chargingTransactionId()).orElseThrow().status())
                     .isEqualTo(ChargingTransactionStatus.COMPLETED);
             assertThat(result.trace()).anyMatch(item -> item.contains("RemoteStopTransaction accepted"));
             assertThat(result.trace()).anyMatch(item -> item.contains("StopTransaction finalized"));
+            await(() -> fixture.connectorStates.findConnector(new DeviceId(DEVICE_CODE), 1)
+                    .map(state -> state.status() == ConnectorStatus.AVAILABLE).orElse(false));
+            assertThat(fixture.deviceStates.find(new DeviceId(DEVICE_CODE)).orElseThrow()
+                    .onlineStatus().name()).isEqualTo("ONLINE");
         } finally { fixture.close(); }
     }
 
@@ -147,12 +155,14 @@ class Ocpp16SimulatorScenarioIntegrationTest {
     private static final class ScenarioFixture implements AutoCloseable {
         private final NettyWebSocketServer server; private final DeviceController controller;
         private final InMemoryCommandRepository commands; private final InMemoryChargingTransactionRepository transactions;
-        private final CaffeineConnectorRuntimeStateStore connectorStates; private final BillingScenarioSupport billing; private final Control control;
+        private final CaffeineConnectorRuntimeStateStore connectorStates; private final CaffeineDeviceRuntimeStateStore deviceStates;
+        private final BillingScenarioSupport billing; private final Control control;
         private ScenarioFixture(NettyWebSocketServer server, DeviceController controller, InMemoryCommandRepository commands,
                                 InMemoryChargingTransactionRepository transactions, CaffeineConnectorRuntimeStateStore connectorStates,
-                                BillingScenarioSupport billing) {
+                                CaffeineDeviceRuntimeStateStore deviceStates, BillingScenarioSupport billing) {
             this.server = server; this.controller = controller; this.commands = commands; this.transactions = transactions;
-            this.connectorStates = connectorStates; this.billing = billing; this.control = new Control(controller, commands, transactions);
+            this.connectorStates = connectorStates; this.deviceStates = deviceStates; this.billing = billing;
+            this.control = new Control(controller, commands, transactions);
         }
         static ScenarioFixture start() {
             TimeProvider clock = Instant::now;
@@ -189,13 +199,18 @@ class Ocpp16SimulatorScenarioIntegrationTest {
             LocalGatewayConnectionCoordinator coordinator = new LocalGatewayConnectionCoordinator(sessions, routes, registry,
                     connected, dispatcher, clock, "scenario-ocpp", Duration.ofMinutes(10));
             DeviceCommandDispatcher gateway = new DeviceCommandDispatcher(new DeviceRouter(routes, clock), sessions, registry);
+            DeviceOperationPreconditions operationPreconditions = new DeviceOperationPreconditions(
+                    deviceStates, connectorStates);
             DeviceController controller = new DeviceController(new FindChargingDeviceUseCase(devices),
-                    new StartChargingUseCase(devices, connectors, commands, transactions, gateway, clock, Duration.ofSeconds(5)),
-                    new StopChargingUseCase(devices, connectors, transactions, commands, gateway, clock, Duration.ofSeconds(5)));
+                    new StartChargingUseCase(devices, connectors, commands, transactions, operationPreconditions,
+                            gateway, clock, Duration.ofSeconds(5)),
+                    new StopChargingUseCase(devices, connectors, transactions, operationPreconditions,
+                            commands, gateway, clock, Duration.ofSeconds(5)), null, operationPreconditions,
+                    new FindDeviceOperationCapabilitiesUseCase(List.of(adapter)));
             WebSocketServerProperties serverProperties = new WebSocketServerProperties();
             serverProperties.setHost("127.0.0.1"); serverProperties.setPort(0);
             NettyWebSocketServer server = new NettyWebSocketServer(serverProperties, List.of(coordinator)); server.start();
-            return new ScenarioFixture(server, controller, commands, transactions, connectorStates, billing);
+            return new ScenarioFixture(server, controller, commands, transactions, connectorStates, deviceStates, billing);
         }
         Ocpp16Simulator simulator() { return new Ocpp16Simulator("127.0.0.1", server.boundPort(), "/ocpp", DEVICE_CODE, 1); }
         PlatformScenarioControl control() { return control; }
@@ -220,10 +235,10 @@ class Ocpp16SimulatorScenarioIntegrationTest {
 
     private static final class InMemoryDeviceRepository implements ChargingDeviceRepository {
         private final UUID id = UUID.randomUUID(), tenantId = UUID.randomUUID(), stationId = UUID.randomUUID();
-        ChargingDevice device() { return new ChargingDevice(id, tenantId, stationId, DEVICE_CODE, "OCPP Simulator Device", DeviceProtocol.OCPP_16, "1.6J", "REGISTERED", Instant.now(), Instant.now(), 0); }
+        ChargingDevice device() { return new ChargingDevice(id, tenantId, stationId, DEVICE_CODE, "OCPP Simulator Device", DeviceProtocol.OCPP_16, "1.6J", com.voltbridge.business.domain.device.DeviceBusinessStatus.ENABLED, Instant.now(), Instant.now(), 0); }
         @Override public Optional<ChargingDevice> findById(UUID value) { return id.equals(value) ? Optional.of(device()) : Optional.empty(); }
         @Override public Optional<ChargingDevice> findByDeviceCode(String code) { return DEVICE_CODE.equals(code) ? Optional.of(device()) : Optional.empty(); }
-        @Override public boolean updateStatus(String code, String status, Instant updatedAt) { return DEVICE_CODE.equals(code); }
+        @Override public boolean updateBusinessStatus(String code, com.voltbridge.business.domain.device.DeviceBusinessStatus businessStatus, Instant updatedAt) { return DEVICE_CODE.equals(code); }
     }
     private static final class InMemoryConnectorRepository implements ConnectorRepository {
         private final Connector connector;

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.voltbridge.business.application.charging.StartChargingUseCase;
 import com.voltbridge.business.application.charging.StopChargingUseCase;
+import com.voltbridge.business.application.device.DeviceOperationPreconditions;
 import com.voltbridge.business.application.command.HandleCommandResultUseCase;
 import com.voltbridge.business.application.device.HandleChargingProgressUseCase;
 import com.voltbridge.business.application.device.HandleConnectorStatusUseCase;
@@ -108,7 +109,7 @@ class Ocpp16WebSocketIntegrationTest {
                 new HandleChargingProgressUseCase(connectorStates, DeviceRuntimeMetrics.NOOP),
                 new HandleCommandResultUseCase(commands),
                 new HandleTransactionCommandResultUseCase(transactions),
-                new HandleTransactionProgressUseCase(resolver, chargingStarted),
+                new HandleTransactionProgressUseCase(resolver, chargingStarted, new NoOpChargingMeterSampleRepository()),
                 new HandleTransactionRecordUseCase(resolver, transactions, commands));
         DeviceEventDispatcher eventDispatcher = new DeviceEventDispatcher(
                 new InMemoryDeviceEventPublisher(handlers));
@@ -135,10 +136,12 @@ class Ocpp16WebSocketIntegrationTest {
                 "ocpp-integration-node", Duration.ofMinutes(10));
         DeviceCommandDispatcher commandGateway = new DeviceCommandDispatcher(
                 new DeviceRouter(routes, timeProvider), sessions, protocols);
+        DeviceOperationPreconditions operationPreconditions = new DeviceOperationPreconditions(
+                deviceStates, connectorStates);
         StartChargingUseCase startCharging = new StartChargingUseCase(devices, connectors, commands,
-                transactions, commandGateway, timeProvider, Duration.ofSeconds(5));
+                transactions, operationPreconditions, commandGateway, timeProvider, Duration.ofSeconds(5));
         StopChargingUseCase stopCharging = new StopChargingUseCase(devices, connectors, transactions,
-                commands, commandGateway, timeProvider, Duration.ofSeconds(5));
+                operationPreconditions, commands, commandGateway, timeProvider, Duration.ofSeconds(5));
 
         WebSocketServerProperties serverProperties = new WebSocketServerProperties();
         serverProperties.setHost("127.0.0.1");
@@ -236,6 +239,14 @@ class Ocpp16WebSocketIntegrationTest {
             assertThat(completed.endMeterKwh()).isEqualByComparingTo("3.5");
             assertThat(completed.energyKwh()).isEqualByComparingTo("2.5");
             assertThat(commands.findById(stopCommandId).orElseThrow().status()).isEqualTo(DeviceCommandStatus.SUCCEEDED);
+            assertThat(devices.device().businessStatus())
+                    .isEqualTo(com.voltbridge.business.domain.device.DeviceBusinessStatus.ENABLED);
+            send(socket, "[2,\"available-1\",\"StatusNotification\",{\"connectorId\":1,\"errorCode\":\"NoError\",\"status\":\"Available\"}]");
+            receive(listener);
+            await(() -> connectorStates.findConnector(new DeviceId(DEVICE_CODE), 1)
+                    .map(state -> state.status() == ConnectorStatus.AVAILABLE).orElse(false));
+            assertThat(deviceStates.find(new DeviceId(DEVICE_CODE)).orElseThrow().onlineStatus().name())
+                    .isEqualTo("ONLINE");
 
             // 设备本地刷卡不创建远程命令，但复用同一个 ChargingTransaction 聚合。
             int commandCount = commands.size();
@@ -321,7 +332,7 @@ class Ocpp16WebSocketIntegrationTest {
         private ChargingDevice device() {
             Instant now = Instant.now();
             return new ChargingDevice(id, tenantId, stationId, DEVICE_CODE, "OCPP integration device",
-                    DeviceProtocol.OCPP_16, "1.6J", "REGISTERED", now, now, 0);
+                    DeviceProtocol.OCPP_16, "1.6J", com.voltbridge.business.domain.device.DeviceBusinessStatus.ENABLED, now, now, 0);
         }
 
         @Override public Optional<ChargingDevice> findById(UUID value) {
@@ -330,7 +341,7 @@ class Ocpp16WebSocketIntegrationTest {
         @Override public Optional<ChargingDevice> findByDeviceCode(String code) {
             return DEVICE_CODE.equals(code) ? Optional.of(device()) : Optional.empty();
         }
-        @Override public boolean updateStatus(String code, String status, Instant updatedAt) {
+        @Override public boolean updateBusinessStatus(String code, com.voltbridge.business.domain.device.DeviceBusinessStatus businessStatus, Instant updatedAt) {
             return DEVICE_CODE.equals(code);
         }
     }

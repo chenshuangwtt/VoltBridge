@@ -1,64 +1,70 @@
-# VoltBridge 计费 MVP 架构
+# Versioned tariff and billing architecture
 
-## 业务边界
+## Scope
 
-`ChargingTransaction` 描述一次物理充电过程；`BillingRecord` 是该过程结束后计算出的不可变应收结果。账单不是支付、退款、结算、发票或订单，当前版本不会处理这些商业流程。
-
-计费仅依赖 Business 中已规范化的交易，不依赖 YunKuaiChong、OCPP、TCP、WebSocket、Gateway 或 Kafka 设备事件类型。因此，两类协议都通过同一条业务主线计费：
+`ChargingTransaction` records one physical charging session. A finalized `BillingRecord` is an immutable amount due for that completed transaction; it does not represent payment, refund, settlement, tax invoice, parking, or reservation fees. YKC and OCPP events are normalized by Business before billing, so pricing has no protocol or Gateway dependency.
 
 ```text
-协议最终记录 / Kafka DeviceEvent
-    -> Business 规范交易处理
-    -> ChargingTransaction = COMPLETED
-    -> ChargingTransactionCompletedEvent（事务提交后）
+protocol progress/final record
+    -> normalized ChargingTransaction + ChargingMeterSample
+    -> ChargingTransactionCompletedEvent (after commit)
     -> BillCompletedTransactionUseCase
-    -> TariffResolver + PricingEngine
-    -> BillingRecord + BillingLineItem
+    -> TariffResolver(transaction.startedAt)
+    -> PricingEngine(FIXED | TIME_OF_USE)
+    -> immutable BillingRecord + line items + pricing snapshot
 ```
 
-在单体部署中，事件直接来自本地协议处理后的 Business 交易；在分布式部署中，Gateway 只投递设备事件，Business 消费后仍走相同的规范交易处理和内部计费监听器。Gateway、协议模块和设备下行均不依赖 Billing。
+## Tariff identity and lifecycle
 
-## 核心模型与职责
+A tariff plan has a stable `familyId`, a business `revision`, and a `TariffRole`, independent of the persistence optimistic-lock `version`. The pair `(familyId, revision)` is unique, and every revision in a family has the same tenant and role. `SCHEDULED` is the operator-managed role for fixed or time-of-use plans. Each tenant also has one database-backed `FALLBACK` family containing only fixed, all-day flat revisions. Pricing inputs (timezone, periods, prices, currency, and effective range) are copied into a new revision when prices change; an existing revision is never edited in place. A bill points to the concrete `tariffPlanId` revision selected when the transaction began.
 
-- `TariffPlan`：租户的固定费率方案，保存货币、电能单价、服务费单价、生效时间和状态。
-- `TariffResolver`：按租户和 `ChargingTransaction.startedAt` 选择已启用且处于有效窗口的方案；它不使用账单执行时的系统时间。
-- `PricingEngine` / `PricingPolicy`：根据方案类型选择显式策略。MVP 仅注册 `FixedRatePricingPolicy`，没有通用规则引擎。
-- `BillingRecord`：已完成交易的一次不可变结算计算，保存金额、货币、交易时间、资费方案和 JSON 定价快照。
-- `BillingLineItem`：可解释的明细。MVP 固定产生 `ENERGY_FEE` 与 `SERVICE_FEE` 两行。
+The effective range is half-open: `[effectiveFrom, effectiveTo)`; a null `effectiveTo` means positive infinity. Activation serializes on the tenant and rejects overlap with another active `SCHEDULED` range using `TARIFF_EFFECTIVE_RANGE_CONFLICT`; adjacent ranges are valid. The resolver queries `SCHEDULED` first at `ChargingTransaction.startedAt`. Exactly one match wins; multiple matches fail with `TARIFF_EFFECTIVE_RANGE_AMBIGUOUS`. With no scheduled match, it resolves exactly one `FALLBACK` revision at the same transaction start time. Missing and ambiguous fallback data fail with `FALLBACK_TARIFF_NOT_FOUND` and `FALLBACK_TARIFF_AMBIGUOUS`; the resolver never picks an arbitrary latest row or invents a price. A transaction keeps its starting revision even when its charging interval crosses a later tariff revision's effective date.
 
-`BillingRecord` 的 JSONB `pricing_snapshot` 保存资费 ID、版本、名称、货币、计价类型、两项单价和生效窗口。查询历史账单时不会重新解析“当前资费”，因此改价不会影响旧账单。
+`RETIRED` plans remain available to historical billing and cannot be reactivated. Any `ACTIVE` scheduled revision may be retired; retirement closes a currently effective range at the retirement instant. If no scheduled tariff matches a subsequent transaction, billing resolves the tenant's `FALLBACK` revision. `DRAFT` plans may have overlapping ranges and can be deleted only when no bill references them. `ACTIVE` and `RETIRED` plans cannot be deleted. Fallback revisions cannot use ordinary activate, retire, delete, or generic revision operations; changing fallback prices uses its dedicated atomic revision operation. The system does not require future scheduled ranges to cover infinity.
 
-## 触发、失败与重试
+Fallback revisions form one contiguous chain per tenant: each prior revision ends exactly when the next starts, the old row is marked retired at that boundary, and exactly one active revision has an open end. Creating a tenant's initial fallback is handled by `EnsureTenantFallbackTariffUseCase`; this repository currently has no tenant-creation application flow, so future tenant creation must call the initializer inside its tenant transaction. The development seed also supplies the fallback for demo tenants.
 
-`HandleTransactionRecordUseCase` 仅在最终记录首次成功应用且交易持久化后发布 `ChargingTransactionCompletedEvent`。`BillingTransactionCompletionListener` 在 `AFTER_COMMIT` 阶段调用账单用例，避免资费缺失或暂时性存储故障回滚已经确认的物理充电交易。
+## Daily periods and pricing types
 
-若交易未完成、缺少最终电量、缺少开始时间或找不到资费，账单不会伪造为零金额。监听器记录失败原因，运营人员补配资费或修复基础设施后可调用：
+Both pricing types use `TariffPeriod` rows with `sequenceNo`, `periodType`, `startMinute`, `endMinute`, energy price, and service fee. Minute bounds are local-day minutes (`00:00 = 0`, `24:00 = 1440`). Periods must be ordered, gap-free, non-overlapping, and cover `[0, 1440]`.
 
-```text
-POST /api/billing-records/by-transaction/{transactionId}/retry
-```
+- `FIXED`: exactly one `FLAT` period from 0 to 1440.
+- `TIME_OF_USE`: one or more `PEAK`, `FLAT`, or `VALLEY` periods covering the complete local day.
 
-该接口与事件重复投递共用同一个幂等用例；已存在账单时直接返回原账单。
+`TariffPlan.timezone` must be an IANA `ZoneId` such as `Asia/Shanghai`; no fixed UTC offset is assumed. The local tariff periods repeat each calendar day in that zone. Current rules do not include weekday/holiday variants, sharp-peak pricing, member pricing, or other fees.
 
-## 幂等与并发
+## Meter evidence and time-of-use allocation
 
-应用层先按 `transactionId` 查询已有账单；持久化层通过 `billing_record.transaction_id` 的唯一约束及 `saveIfAbsent` 处理竞争。多个 Business 实例、Kafka 至少一次投递或设备最终记录重传都只能得到一张账单，未使用进程内 `synchronized` 锁。
+`HandleTransactionProgressUseCase` first resolves the device event to a real transaction. Only events with non-null cumulative `energyKwh` are saved as `ChargingMeterSample`; the protocol layer does not write billing storage. The event UUID is the idempotency key, so Kafka redelivery inserts the sample once. Other high-frequency telemetry remains in runtime state.
 
-## 数据库与 API
+TOU billing builds an ordered timeline from the transaction's real start/end meter readings and persisted samples within its start/end times. It requires start and end anchors, non-decreasing cumulative readings, and agreement between the meter delta and final transaction energy within the centralized `BillingDecimalPolicy.METER_ENERGY_TOLERANCE` (0.001 kWh). It never invents meter readings. Missing or inconsistent evidence fails with `METER_TIMELINE_MISSING`, `METER_READING_NON_MONOTONIC`, or `METER_ENERGY_MISMATCH`; operators can use the existing billing retry endpoint after correcting/replaying evidence.
 
-本章节记录 Billing 首次落库时的历史变更：当时以 `schema-init.sql` 和 `schema_version` 增量维护结构，登记版本 `009` 并新增以下表。当前正式 schema 初始化已切换为 Flyway；完整 baseline 和旧开发库迁移策略见 [数据库迁移指南](../deployment/database-migrations.md)。
+Each adjacent pair of real readings defines a local interval. If a tariff boundary lies inside that interval, VoltBridge linearly interpolates the cumulative reading at that boundary and assigns the resulting local energy deltas to the periods on either side. Long intervals are split at every crossed daily boundary, including midnight, using the tariff `ZoneId`. This is interpolation bounded by actual neighboring readings; it is not whole-transaction time-ratio allocation. Small precision residuals are reconciled into the final applied segment only within the central tolerance and are recorded in the pricing snapshot.
 
-当时新增：
+FIXED billing needs only the transaction's final energy. FIXED and TOU use the same centralized decimal policy: energy and unit price are stored at six decimals; each fee line is rounded to two currency decimals with `HALF_UP`. Each occupied TOU period produces an `ENERGY_FEE` and `SERVICE_FEE` line. The sum of lines must equal the billing subtotal and total.
 
-- `tariff_plan`
-- `billing_record`（`transaction_id` 唯一）
-- `billing_line_item`
+## Immutable billing evidence
 
-主要 API：
+The JSON `pricing_snapshot` is serialized from a typed DTO with Jackson. It contains the selected role (`FALLBACK` or `SCHEDULED`), concrete tariff ID/family/revision, name, currency, type, timezone, effective range, every tariff period, applied period energies and prices, fee amounts, totals, and any meter reconciliation. `BillingRecord.tariffPlanId` references the concrete revision. `BillingRecord` and its line items are immutable after finalization; new tariff revisions cannot change old bills.
 
-- `POST /api/tariffs`：创建固定资费草稿。
-- `POST /api/tariffs/{tariffPlanId}/activate`：启用方案。
-- `GET /api/tariffs?tenantId={tenantId}`、`GET /api/tariffs/{tariffPlanId}`：查询资费。
-- `GET /api/billing-records/{billingRecordId}`、`GET /api/billing-records/by-transaction/{transactionId}`：查询可解释账单。
+## API
 
-开发演示可显式创建 `energyPricePerKwh=0.80`、`serviceFeePerKwh=0.20`、`currency=CNY` 的方案；这些值只属于 API 配置或测试数据，未硬编码在生产计费逻辑中。
+- `POST /api/tariffs`: create a `SCHEDULED` `DRAFT` fixed or TOU plan. The request does not accept a role.
+- `POST /api/tariffs/{tariffPlanId}/revisions`: create the next immutable `DRAFT` in a scheduled source family; fallback changes use the dedicated API.
+- `POST /api/tariffs/{tariffPlanId}/activate`: validate and activate, rejecting overlaps with active `SCHEDULED` plans only.
+- `POST /api/tariffs/{tariffPlanId}/retire`: retire an active scheduled revision; subsequent transactions with no matching scheduled tariff resolve to fallback.
+- `DELETE /api/tariffs/{tariffPlanId}`: delete an unreferenced scheduled `DRAFT`; fallback revisions can never be deleted.
+- `GET /api/tenants/{tenantId}/fallback-tariff?effectiveAt={instant}`: resolve the tenant fallback at the requested instant, defaulting to platform time.
+- `POST /api/tenants/{tenantId}/fallback-tariff/revisions`: atomically switch fallback at `switchAt` with new fixed energy and service prices.
+- `GET /api/tariffs?tenantId={tenantId}` and `GET /api/tariffs/{tariffPlanId}`: return revision metadata and all periods.
+- `GET /api/billing-records/{billingRecordId}` and `GET /api/billing-records/by-transaction/{transactionId}`: retrieve the immutable bill.
+
+OpenAPI is generated from the backend DTOs and documents the period bounds and prices.
+
+## Persistence and local fixtures
+
+`V1__baseline.sql` contains tariff role, retirement boundaries, the revision high-water table, and indexes for one fallback family and one open-ended fallback revision per tenant. Flyway is the only schema initialization path; the current baseline deliberately contains the complete schema, with no V2 migration. Development plans and billing examples live in the explicit `dev-seed.sql` fixture, never in Flyway migrations. The seed includes a fallback and scheduled plans for the demo tenant. See [database migrations](../deployment/database-migrations.md) and [the billing demo](../demo/charging-billing-demo.md).
+
+## Completion, idempotency, and retry
+
+The completion listener runs after the transaction record commits, so a billing failure cannot roll back a physical charging completion. Repeated completion events and concurrent callers use `billing_record.transaction_id` uniqueness and `saveIfAbsent`; an existing bill is returned unchanged. A missing tariff or invalid TOU meter timeline does not create a zero-value bill. Operators can retry through `POST /api/billing-records/by-transaction/{transactionId}/retry` after resolving the cause.

@@ -13,7 +13,7 @@ public record ChargingDevice(
         String deviceName,
         DeviceProtocol protocol,
         String protocolVersion,
-        String status,
+        DeviceBusinessStatus businessStatus,
         Instant createdAt,
         Instant updatedAt,
         long version) {

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.Version;
+import com.voltbridge.business.domain.device.DeviceBusinessStatus;
 import com.voltbridge.infra.persistence.typehandler.PostgreSqlJsonbTypeHandler;
 import org.apache.ibatis.type.JdbcType;
 
@@ -25,7 +26,8 @@ public class ChargingDeviceEntity {
     public String brand;
     public String model;
     public String deviceType;
-    public String status;
+    @TableField("business_status")
+    public DeviceBusinessStatus businessStatus;
     @TableField(jdbcType = JdbcType.OTHER, typeHandler = PostgreSqlJsonbTypeHandler.class)
     public String additionalInfo;
     public Instant createdAt;

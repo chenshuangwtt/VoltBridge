@@ -8,6 +8,7 @@ import com.voltbridge.device.command.StartChargingCommand;
 import com.voltbridge.device.command.StopChargingCommand;
 import com.voltbridge.device.event.CommandResultEvent;
 import com.voltbridge.device.event.CommandResultStatus;
+import com.voltbridge.device.model.DeviceOperationCapabilities;
 import com.voltbridge.device.model.DeviceProtocol;
 import com.voltbridge.protocol.common.ProtocolContext;
 import com.voltbridge.protocol.common.spi.ProtocolAdapter;
@@ -59,6 +60,11 @@ public class Ocpp16ProtocolAdapter implements ProtocolAdapter {
 
     @Override public String endpointId() { return ENDPOINT_ID; }
     @Override public DeviceProtocol protocol() { return DeviceProtocol.OCPP_16; }
+
+    @Override
+    public DeviceOperationCapabilities operationCapabilities() {
+        return new DeviceOperationCapabilities(true, true, false, false);
+    }
 
     @Override
     public ProtocolInboundResult decode(ProtocolContext context, TransportPayload frame) {

@@ -1,5 +1,7 @@
 # 多协议架构审计
 
+> 阶段性审计记录。下文的 `REFACTOR`、`REMOVE` 与 `DEFER` 是该次审计提出的建议快照，不表示这些事项仍待处理；当前模块和运行状态以 [模块依赖](module-dependencies.md)、[协议覆盖](../protocol/protocol-coverage-audit.md)、[分布式 E2E](../testing/distributed-e2e.md) 与[已知限制](../release/known-limitations.md)为准。
+
 ## 审计范围与结论
 
 本审计覆盖 Maven 模块图、设备 API、设备网关、TCP/WebSocket 传输、云快充 V1.5/OCPP 1.6J 协议、业务领域与应用、持久化/缓存/内存消息/可观测性、单体组合根、Protobuf 契约及现有集成测试。

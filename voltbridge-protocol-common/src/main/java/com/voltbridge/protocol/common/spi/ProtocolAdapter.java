@@ -1,7 +1,9 @@
 package com.voltbridge.protocol.common.spi;
 
 import com.voltbridge.device.command.DeviceCommand;
+import com.voltbridge.device.model.DeviceOperationCapabilities;
 import com.voltbridge.device.model.DeviceProtocol;
+import com.voltbridge.device.port.DeviceOperationCapabilityProvider;
 import com.voltbridge.protocol.common.ProtocolContext;
 import com.voltbridge.transport.api.TransportPayload;
 
@@ -12,7 +14,7 @@ import com.voltbridge.transport.api.TransportPayload;
  * 标准 {@link DeviceCommand} 编码为传输载荷。实现可依赖协议 codec，但不得依赖业务用例、
  * 持久化实现或 Netty 运行时对象。</p>
  */
-public interface ProtocolAdapter {
+public interface ProtocolAdapter extends DeviceOperationCapabilityProvider {
 
     String endpointId();
 
@@ -21,4 +23,9 @@ public interface ProtocolAdapter {
     ProtocolInboundResult decode(ProtocolContext context, TransportPayload frame);
 
     TransportPayload encode(ProtocolContext context, DeviceCommand command);
+
+    @Override
+    default DeviceOperationCapabilities operationCapabilities() {
+        return DeviceOperationCapabilities.NONE;
+    }
 }

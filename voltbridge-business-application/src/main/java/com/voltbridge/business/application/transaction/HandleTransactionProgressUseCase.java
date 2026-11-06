@@ -1,5 +1,7 @@
 package com.voltbridge.business.application.transaction;
 
+import com.voltbridge.business.domain.billing.ChargingMeterSample;
+import com.voltbridge.business.domain.billing.ChargingMeterSampleRepository;
 import com.voltbridge.device.event.ChargingProgressEvent;
 import com.voltbridge.device.port.DeviceEventHandler;
 import org.springframework.stereotype.Service;
@@ -13,11 +15,14 @@ import org.springframework.stereotype.Service;
 public class HandleTransactionProgressUseCase implements DeviceEventHandler<ChargingProgressEvent> {
     private final ChargingTransactionResolver resolver;
     private final ChargingStartedService chargingStartedService;
+    private final ChargingMeterSampleRepository meterSamples;
 
     public HandleTransactionProgressUseCase(ChargingTransactionResolver resolver,
-                                            ChargingStartedService chargingStartedService) {
+                                            ChargingStartedService chargingStartedService,
+                                            ChargingMeterSampleRepository meterSamples) {
         this.resolver = resolver;
         this.chargingStartedService = chargingStartedService;
+        this.meterSamples = meterSamples;
     }
 
     @Override public Class<ChargingProgressEvent> eventType() { return ChargingProgressEvent.class; }
@@ -26,7 +31,13 @@ public class HandleTransactionProgressUseCase implements DeviceEventHandler<Char
     public void handle(ChargingProgressEvent event) {
         resolver.resolve(event.deviceId(), event.protocol(),
                         event.connectorNo(), event.transactionId(), event.occurredAt())
-                .ifPresent(transaction -> chargingStartedService.confirm(
-                        transaction, event.stateOfCharge(), event.occurredAt()));
+                .ifPresent(transaction -> {
+                    chargingStartedService.confirm(transaction, event.stateOfCharge(), event.occurredAt());
+                    if (event.energyKwh() != null) {
+                        meterSamples.saveIfAbsent(new ChargingMeterSample(event.eventId(), transaction.id(),
+                                event.occurredAt(), event.energyKwh(), event.outputPowerKw(),
+                                event.stateOfCharge(), event.protocol()));
+                    }
+                });
     }
 }

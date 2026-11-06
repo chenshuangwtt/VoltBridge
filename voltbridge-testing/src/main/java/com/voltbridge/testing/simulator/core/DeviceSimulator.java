@@ -17,8 +17,14 @@ public interface DeviceSimulator extends AutoCloseable {
     void connect() throws Exception;
     void loginOrBoot() throws Exception;
     void heartbeat() throws Exception;
+    void sendHeartbeat() throws Exception;
+    default Duration heartbeatInterval() { return Duration.ofSeconds(30); }
     void connectorReady() throws Exception;
     void awaitRemoteStart(Duration timeout) throws Exception;
+    default boolean awaitRemoteStartIfAvailable(Duration timeout) throws Exception {
+        awaitRemoteStart(timeout);
+        return true;
+    }
     void acceptRemoteStart() throws Exception;
     void beginCharging(ChargingSample sample) throws Exception;
     void sendChargingProgress(ChargingSample sample) throws Exception;

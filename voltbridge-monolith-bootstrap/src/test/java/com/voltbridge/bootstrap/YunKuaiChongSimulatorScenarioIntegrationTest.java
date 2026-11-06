@@ -4,6 +4,8 @@ import com.voltbridge.business.application.charging.StartChargingUseCase;
 import com.voltbridge.business.application.charging.StopChargingUseCase;
 import com.voltbridge.business.application.command.HandleCommandResultUseCase;
 import com.voltbridge.business.application.device.FindChargingDeviceUseCase;
+import com.voltbridge.business.application.device.DeviceOperationPreconditions;
+import com.voltbridge.business.application.device.FindDeviceOperationCapabilitiesUseCase;
 import com.voltbridge.business.application.device.HandleChargingProgressUseCase;
 import com.voltbridge.business.application.device.HandleConnectorStatusUseCase;
 import com.voltbridge.business.application.device.HandleDeviceConnectedUseCase;
@@ -30,6 +32,7 @@ import com.voltbridge.common.time.TimeProvider;
 import com.voltbridge.device.event.DeviceEvent;
 import com.voltbridge.device.model.DeviceId;
 import com.voltbridge.device.model.DeviceOnlineStatus;
+import com.voltbridge.device.model.ConnectorStatus;
 import com.voltbridge.device.model.DeviceProtocol;
 import com.voltbridge.device.port.DeviceEventHandler;
 import com.voltbridge.gateway.command.DeviceCommandDispatcher;
@@ -120,7 +123,7 @@ class YunKuaiChongSimulatorScenarioIntegrationTest {
         ScenarioFixture fixture = ScenarioFixture.start();
         ChargingScenarioConfig config = config("ykc-remote-start-remote-stop", CompletionMode.REMOTE_STOP, false);
         try (YunKuaiChongV150Simulator simulator = fixture.simulator()) {
-            ScenarioResult result = new ChargingScenarioRunner().runRemoteStartScenario(simulator, config, fixture.control());
+            ScenarioResult result = new ChargingScenarioRunner().runRemoteStartScenario(simulator, config, fixture.control(), false);
 
             assertThat(result.stopCommandId()).isNotNull();
             assertThat(fixture.commands.findById(result.stopCommandId()).orElseThrow().status())
@@ -129,6 +132,10 @@ class YunKuaiChongSimulatorScenarioIntegrationTest {
                     .isEqualTo(ChargingTransactionStatus.COMPLETED);
             assertThat(result.trace()).anyMatch(item -> item.contains("EndCharge sent"));
             assertThat(result.trace()).anyMatch(item -> item.contains("Final TransactionRecord acknowledged"));
+            await(() -> fixture.connectorStates.findConnector(new DeviceId(DEVICE_CODE), 1)
+                    .map(state -> state.status() == ConnectorStatus.AVAILABLE).orElse(false));
+            assertThat(fixture.deviceStates.find(new DeviceId(DEVICE_CODE)).orElseThrow()
+                    .onlineStatus()).isEqualTo(DeviceOnlineStatus.ONLINE);
         } finally {
             fixture.close();
         }
@@ -152,6 +159,8 @@ class YunKuaiChongSimulatorScenarioIntegrationTest {
             simulator.disconnect();
             await(() -> fixture.deviceStates.find(new DeviceId(DEVICE_CODE))
                     .map(state -> state.onlineStatus() == DeviceOnlineStatus.OFFLINE).orElse(false));
+            assertThat(fixture.devices.device().businessStatus())
+                    .isEqualTo(com.voltbridge.business.domain.device.DeviceBusinessStatus.ENABLED);
             ChargingTransaction transaction = fixture.transactions.findByCommandId(startId).orElseThrow();
             assertThat(transaction.status()).isEqualTo(ChargingTransactionStatus.CHARGING);
         } finally {
@@ -179,15 +188,19 @@ class YunKuaiChongSimulatorScenarioIntegrationTest {
         private final DeviceController controller;
         private final InMemoryCommandRepository commands;
         private final InMemoryChargingTransactionRepository transactions;
+        private final InMemoryDeviceRepository devices;
         private final CaffeineDeviceRuntimeStateStore deviceStates;
+        private final CaffeineConnectorRuntimeStateStore connectorStates;
         private final BillingScenarioSupport billing;
         private final Control control;
 
         private ScenarioFixture(NettyTcpServer server, DeviceController controller, InMemoryCommandRepository commands,
                                 InMemoryChargingTransactionRepository transactions, CaffeineDeviceRuntimeStateStore deviceStates,
-                                BillingScenarioSupport billing) {
+                                 CaffeineConnectorRuntimeStateStore connectorStates, BillingScenarioSupport billing,
+                                 InMemoryDeviceRepository devices) {
             this.server = server; this.controller = controller; this.commands = commands;
-            this.transactions = transactions; this.deviceStates = deviceStates;
+            this.transactions = transactions; this.deviceStates = deviceStates; this.connectorStates = connectorStates;
+            this.devices = devices;
             this.billing = billing;
             this.control = new Control(controller, commands, transactions);
         }
@@ -209,7 +222,8 @@ class YunKuaiChongSimulatorScenarioIntegrationTest {
                     new HandleHeartbeatUseCase(deviceStates, DeviceRuntimeMetrics.NOOP),
                     new HandleConnectorStatusUseCase(connectorStates, DeviceRuntimeMetrics.NOOP),
                     new HandleChargingProgressUseCase(connectorStates, DeviceRuntimeMetrics.NOOP),
-                    new HandleCommandResultUseCase(commands), new HandleTransactionProgressUseCase(resolver, chargingStarted),
+                    new HandleCommandResultUseCase(commands), new HandleTransactionProgressUseCase(resolver, chargingStarted,
+                            new NoOpChargingMeterSampleRepository()),
                     new HandleChargingEndedUseCase(resolver, transactions, commands),
                     new HandleTransactionRecordUseCase(resolver, transactions, commands, billing::onBusinessEvent));
             DeviceEventDispatcher dispatcher = new DeviceEventDispatcher(new InMemoryDeviceEventPublisher(handlers));
@@ -234,14 +248,20 @@ class YunKuaiChongSimulatorScenarioIntegrationTest {
                     new ProtocolRegistry(List.of(adapter)), connected, dispatcher, clock, "scenario-ykc", Duration.ofMinutes(10));
             DeviceCommandDispatcher gateway = new DeviceCommandDispatcher(new DeviceRouter(routes, clock), sessions,
                     new ProtocolRegistry(List.of(adapter)));
+            DeviceOperationPreconditions operationPreconditions = new DeviceOperationPreconditions(
+                    deviceStates, connectorStates);
             DeviceController controller = new DeviceController(new FindChargingDeviceUseCase(devices),
-                    new StartChargingUseCase(devices, connectors, commands, transactions, gateway, clock, Duration.ofSeconds(5)),
-                    new StopChargingUseCase(devices, connectors, transactions, commands, gateway, clock, Duration.ofSeconds(5)));
+                    new StartChargingUseCase(devices, connectors, commands, transactions, operationPreconditions,
+                            gateway, clock, Duration.ofSeconds(5)),
+                    new StopChargingUseCase(devices, connectors, transactions, operationPreconditions,
+                            commands, gateway, clock, Duration.ofSeconds(5)), null, operationPreconditions,
+                    new FindDeviceOperationCapabilitiesUseCase(List.of(adapter)));
             TcpServerProperties properties = new TcpServerProperties();
             properties.setHost("127.0.0.1"); properties.setPort(0);
             NettyTcpServer server = new NettyTcpServer(properties, List.of(coordinator));
             server.start();
-            return new ScenarioFixture(server, controller, commands, transactions, deviceStates, billing);
+            return new ScenarioFixture(server, controller, commands, transactions, deviceStates, connectorStates, billing,
+                    devices);
         }
 
         YunKuaiChongV150Simulator simulator() { return new YunKuaiChongV150Simulator("127.0.0.1", server.boundPort(), DEVICE_CODE, 1); }
@@ -273,10 +293,10 @@ class YunKuaiChongSimulatorScenarioIntegrationTest {
 
     private static final class InMemoryDeviceRepository implements ChargingDeviceRepository {
         private final UUID id = UUID.randomUUID(), tenantId = UUID.randomUUID(), stationId = UUID.randomUUID();
-        ChargingDevice device() { return new ChargingDevice(id, tenantId, stationId, DEVICE_CODE, "YKC Simulator Device", DeviceProtocol.YUN_KUAI_CHONG_150, "1.5", "REGISTERED", Instant.now(), Instant.now(), 0); }
+        ChargingDevice device() { return new ChargingDevice(id, tenantId, stationId, DEVICE_CODE, "YKC Simulator Device", DeviceProtocol.YUN_KUAI_CHONG_150, "1.5", com.voltbridge.business.domain.device.DeviceBusinessStatus.ENABLED, Instant.now(), Instant.now(), 0); }
         @Override public Optional<ChargingDevice> findById(UUID value) { return id.equals(value) ? Optional.of(device()) : Optional.empty(); }
         @Override public Optional<ChargingDevice> findByDeviceCode(String code) { return DEVICE_CODE.equals(code) ? Optional.of(device()) : Optional.empty(); }
-        @Override public boolean updateStatus(String code, String status, Instant updatedAt) { return DEVICE_CODE.equals(code); }
+        @Override public boolean updateBusinessStatus(String code, com.voltbridge.business.domain.device.DeviceBusinessStatus businessStatus, Instant updatedAt) { return DEVICE_CODE.equals(code); }
     }
 
     private static final class InMemoryConnectorRepository implements ConnectorRepository {

@@ -3,6 +3,7 @@ package com.voltbridge.business.application.transaction;
 import com.voltbridge.business.domain.connector.Connector;
 import com.voltbridge.business.domain.connector.ConnectorRepository;
 import com.voltbridge.business.domain.device.ChargingDevice;
+import com.voltbridge.business.domain.device.DeviceBusinessStatus;
 import com.voltbridge.business.domain.device.ChargingDeviceRepository;
 import com.voltbridge.business.domain.transaction.ChargingTransaction;
 import com.voltbridge.business.domain.transaction.ChargingTransactionRepository;
@@ -35,7 +36,7 @@ class ChargingTransactionRecoveryTest {
         Instant now = Instant.parse("2026-10-18T08:00:00Z");
         ChargingDevice device = new ChargingDevice(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 DEVICE_CODE, "Recovery device", DeviceProtocol.YUN_KUAI_CHONG_150,
-                "1.5", "ONLINE", now, now, 0);
+                "1.5", DeviceBusinessStatus.ENABLED, now, now, 0);
         Connector connector = new Connector(UUID.randomUUID(), device.tenantId(), device.stationId(),
                 device.id(), 1, "CONNECTOR-01", "DC", new BigDecimal("120"),
                 "CHARGING", now, now);
@@ -98,7 +99,7 @@ class ChargingTransactionRecoveryTest {
     private record FixedDeviceRepository(ChargingDevice device) implements ChargingDeviceRepository {
         @Override public Optional<ChargingDevice> findById(UUID id) { return device.id().equals(id) ? Optional.of(device) : Optional.empty(); }
         @Override public Optional<ChargingDevice> findByDeviceCode(String deviceCode) { return device.deviceCode().equals(deviceCode) ? Optional.of(device) : Optional.empty(); }
-        @Override public boolean updateStatus(String deviceCode, String status, Instant updatedAt) { return false; }
+        @Override public boolean updateBusinessStatus(String deviceCode, DeviceBusinessStatus businessStatus, Instant updatedAt) { return false; }
     }
 
     private record FixedConnectorRepository(Connector connector) implements ConnectorRepository {

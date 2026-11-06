@@ -4,10 +4,17 @@ import com.voltbridge.business.application.billing.BillCompletedTransactionUseCa
 import com.voltbridge.business.application.billing.ChargingTransactionCompletedEvent;
 import com.voltbridge.business.application.billing.DefaultPricingEngine;
 import com.voltbridge.business.application.billing.DefaultTariffResolver;
+import com.voltbridge.business.application.billing.PricingSnapshotSerializer;
 import com.voltbridge.business.domain.billing.BillingRecord;
 import com.voltbridge.business.domain.billing.BillingRecordRepository;
+import com.voltbridge.business.domain.billing.ChargingMeterSample;
+import com.voltbridge.business.domain.billing.ChargingMeterSampleRepository;
+import com.voltbridge.business.domain.billing.PricingType;
 import com.voltbridge.business.domain.billing.TariffPlan;
+import com.voltbridge.business.domain.billing.TariffPeriod;
+import com.voltbridge.business.domain.billing.TariffPeriodType;
 import com.voltbridge.business.domain.billing.TariffPlanRepository;
+import com.voltbridge.business.domain.billing.TariffRole;
 import com.voltbridge.business.domain.transaction.ChargingTransactionRepository;
 import com.voltbridge.common.time.TimeProvider;
 
@@ -32,13 +39,17 @@ final class BillingScenarioSupport {
 
     BillingScenarioSupport(ChargingTransactionRepository transactions, UUID tenantId) {
         InMemoryTariffs tariffs = new InMemoryTariffs();
-        TariffPlan tariff = TariffPlan.create(tenantId, "Simulator demo tariff", "CNY",
-                new BigDecimal("0.80"), new BigDecimal("0.20"), Instant.EPOCH, null, Instant.now());
+        TariffPlan tariff = TariffPlan.create(tenantId, "Simulator demo tariff", "CNY", PricingType.FIXED,
+                "Asia/Shanghai", List.of(new TariffPeriod(1, TariffPeriodType.FLAT, 0, 1440,
+                        new BigDecimal("0.80"), new BigDecimal("0.20"))),
+                Instant.EPOCH, null, Instant.now());
         tariff.activate(Instant.now());
         tariffs.save(tariff);
         TimeProvider clock = Instant::now;
-        this.billing = new BillCompletedTransactionUseCase(transactions, records,
-                new DefaultTariffResolver(tariffs), new DefaultPricingEngine(), clock);
+        this.billing = new BillCompletedTransactionUseCase(transactions, records, new InMemoryMeterSamples(),
+                new DefaultTariffResolver(tariffs), new DefaultPricingEngine(),
+                new PricingSnapshotSerializer(new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules()),
+                clock);
     }
 
     void onBusinessEvent(Object event) {
@@ -53,10 +64,12 @@ final class BillingScenarioSupport {
 
     private static final class InMemoryTariffs implements TariffPlanRepository {
         private final ConcurrentMap<UUID, TariffPlan> values = new ConcurrentHashMap<>();
+        private final ConcurrentMap<UUID, Integer> revisionHighWaterMarks = new ConcurrentHashMap<>();
 
         @Override
         public void save(TariffPlan plan) {
             values.put(plan.id(), plan);
+            revisionHighWaterMarks.merge(plan.familyId(), plan.revision(), Math::max);
         }
 
         @Override
@@ -70,9 +83,39 @@ final class BillingScenarioSupport {
         }
 
         @Override
-        public Optional<TariffPlan> findEffectiveActive(UUID tenantId, Instant effectiveAt) {
-            return findByTenantId(tenantId).stream().filter(plan -> plan.effectiveAt(effectiveAt))
-                    .max(Comparator.comparing(TariffPlan::effectiveFrom));
+        public List<TariffPlan> findEffectiveAt(UUID tenantId, TariffRole role, Instant effectiveAt) {
+            List<TariffPlan> matches = findByTenantId(tenantId).stream()
+                    .filter(plan -> plan.role() == role && plan.effectiveAt(effectiveAt)).toList();
+            return matches;
+        }
+
+        @Override public List<TariffPlan> findActiveOverlapping(UUID tenantId, Instant from, Instant to,
+                                                               UUID excludingPlanId) {
+            com.voltbridge.business.domain.billing.TariffEffectiveRange candidate =
+                    new com.voltbridge.business.domain.billing.TariffEffectiveRange(from, to);
+            return values.values().stream().filter(plan -> !plan.id().equals(excludingPlanId)
+                    && plan.tenantId().equals(tenantId)
+                    && plan.role() == TariffRole.SCHEDULED
+                    && plan.status() == com.voltbridge.business.domain.billing.TariffPlanStatus.ACTIVE
+                    && plan.effectiveRange().overlaps(candidate)).toList();
+        }
+
+        @Override public void lockTenantForTariffLifecycle(UUID tenantId) { }
+        @Override public void lockFamilyForRevision(UUID familyId) { }
+        @Override public int nextRevision(UUID familyId) {
+            return revisionHighWaterMarks.merge(familyId, 1, Integer::sum);
+        }
+        @Override public boolean delete(UUID id) { return values.remove(id) != null; }
+    }
+
+    private static final class InMemoryMeterSamples implements ChargingMeterSampleRepository {
+        private final ConcurrentMap<UUID, ChargingMeterSample> values = new ConcurrentHashMap<>();
+        @Override public boolean saveIfAbsent(ChargingMeterSample sample) {
+            return values.putIfAbsent(sample.eventId(), sample) == null;
+        }
+        @Override public List<ChargingMeterSample> findByTransactionId(UUID transactionId) {
+            return values.values().stream().filter(sample -> sample.transactionId().equals(transactionId))
+                    .sorted(Comparator.comparing(ChargingMeterSample::occurredAt)).toList();
         }
     }
 
@@ -87,6 +130,11 @@ final class BillingScenarioSupport {
         @Override
         public Optional<BillingRecord> findByTransactionId(UUID transactionId) {
             return Optional.ofNullable(values.get(transactionId));
+        }
+
+        @Override
+        public boolean existsByTariffPlanId(UUID tariffPlanId) {
+            return values.values().stream().anyMatch(record -> record.tariffPlanId().equals(tariffPlanId));
         }
 
         @Override

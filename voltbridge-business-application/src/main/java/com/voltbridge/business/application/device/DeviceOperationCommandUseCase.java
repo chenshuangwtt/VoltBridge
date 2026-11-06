@@ -1,5 +1,6 @@
 package com.voltbridge.business.application.device;
 
+import com.voltbridge.business.application.command.DeviceCommandFailure;
 import com.voltbridge.business.domain.command.DeviceCommand;
 import com.voltbridge.business.domain.command.DeviceCommandRepository;
 import com.voltbridge.business.domain.command.DeviceCommandType;
@@ -11,6 +12,8 @@ import com.voltbridge.device.command.ResetDeviceCommand;
 import com.voltbridge.device.command.SynchronizeTimeCommand;
 import com.voltbridge.device.model.DeviceId;
 import com.voltbridge.device.port.DeviceCommandGateway;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -26,18 +29,26 @@ import java.util.UUID;
  */
 @Service
 public class DeviceOperationCommandUseCase {
+    private static final Logger LOGGER = LoggerFactory.getLogger(DeviceOperationCommandUseCase.class);
+
     private final ChargingDeviceRepository deviceRepository;
+    private final DeviceOperationPreconditions operationPreconditions;
+    private final FindDeviceOperationCapabilitiesUseCase findCapabilities;
     private final DeviceCommandRepository commandRepository;
     private final DeviceCommandGateway commandGateway;
     private final TimeProvider timeProvider;
     private final Duration timeout;
 
     public DeviceOperationCommandUseCase(ChargingDeviceRepository deviceRepository,
+                                         DeviceOperationPreconditions operationPreconditions,
+                                         FindDeviceOperationCapabilitiesUseCase findCapabilities,
                                          DeviceCommandRepository commandRepository,
                                          DeviceCommandGateway commandGateway,
                                          TimeProvider timeProvider,
                                          @Value("${voltbridge.device.command.operation-timeout:PT30S}") Duration timeout) {
         this.deviceRepository = deviceRepository;
+        this.operationPreconditions = operationPreconditions;
+        this.findCapabilities = findCapabilities;
         this.commandRepository = commandRepository;
         this.commandGateway = commandGateway;
         this.timeProvider = timeProvider;
@@ -60,6 +71,9 @@ public class DeviceOperationCommandUseCase {
     private UUID dispatch(String deviceCode, DeviceCommandType type, String payload, OutboundFactory factory) {
         ChargingDevice device = deviceRepository.findByDeviceCode(deviceCode)
                 .orElseThrow(() -> new VoltBridgeException("DEVICE_NOT_FOUND", "Device not found: " + deviceCode));
+        operationPreconditions.requireDeviceEnabled(device);
+        operationPreconditions.requireOnline(device);
+        requireSupported(device, type);
         Instant now = timeProvider.now();
         DeviceCommand candidate = DeviceCommand.create(device.tenantId(), device.id(), device.deviceCode(), null, null,
                 type, device.deviceCode(), payload, now, now.plus(timeout));
@@ -77,6 +91,19 @@ public class DeviceOperationCommandUseCase {
         return command.id();
     }
 
+    private void requireSupported(ChargingDevice device, DeviceCommandType type) {
+        var capabilities = findCapabilities.execute(device.protocol());
+        boolean supported = switch (type) {
+            case SYNCHRONIZE_TIME -> capabilities.timeSync();
+            case RESET_DEVICE -> capabilities.reset();
+            default -> true;
+        };
+        if (!supported) {
+            throw new VoltBridgeException("DEVICE_OPERATION_NOT_SUPPORTED",
+                    "Operation " + type + " is not supported by protocol " + device.protocol());
+        }
+    }
+
     private void completeDispatch(UUID commandId, Throwable error) {
         DeviceCommand command = commandRepository.findById(commandId).orElse(null);
         if (command == null) {
@@ -90,9 +117,11 @@ public class DeviceOperationCommandUseCase {
             return;
         }
         Throwable cause = error.getCause() == null ? error : error.getCause();
-        String code = cause instanceof VoltBridgeException exception ? exception.code() : "TRANSPORT_SEND_FAILED";
-        if (command.markFailed(code, cause.getMessage(), "{}", now)) {
+        String code = DeviceCommandFailure.code(cause, "TRANSPORT_SEND_FAILED");
+        if (command.markFailed(code, DeviceCommandFailure.reason(cause), "{}", now)) {
             commandRepository.save(command);
+            DeviceCommandFailure.log(LOGGER, "Device operation command dispatch failed",
+                    command.id(), code, cause);
         }
     }
 

@@ -68,13 +68,101 @@ mvn -pl voltbridge-monolith-bootstrap -am "-Dtest=YunKuaiChongSimulatorScenarioI
 
 已覆盖的轻量故障场景包括云快充重复 `0x3B` 与充电中断线。断线只会使设备离线，交易保持 `CHARGING`，不会被错误完成。模拟器接口保留了命令等待和网络连接控制点，可继续扩展为延迟响应、无响应或晚到响应。
 
-## 手工模式
+## 独立运行模拟器
 
-先在本机启动 VoltBridge，并在数据库中准备对应协议、设备号和枪号。然后从 IDE 运行 `com.voltbridge.testing.simulator.scenario.ManualSimulatorMain`，或按模块 classpath 运行该 main。示例参数：
+在仓库根目录构建可执行 fat JAR：
 
-```text
---protocol=ykc --host=127.0.0.1 --port=9000 --device=20231212000010 --connector=1
---protocol=ocpp --host=127.0.0.1 --port=9100 --device=OCPP-SIM-001 --connector=1 --remote-stop=true
+```powershell
+.\mvnw.cmd -pl voltbridge-testing -am -Psimulator package -DskipTests
+java -jar .\voltbridge-testing\target\voltbridge-device-simulator.jar --help
 ```
 
-CLI 上线后等待操作者调用平台远程启动 API；若使用 `--remote-stop=true`，它在半程等待远程停止 API。可用 `--real-duration-seconds`、`--simulated-duration-minutes` 和 `--progress-interval-seconds` 调整节奏。
+`--help` 会列出参数、默认值和输入范围。参数必须使用 `--key=value`；未知参数或无效端口、枪号、布尔值会打印错误并以非零状态退出。程序复用 `voltbridge-testing` 中现有的 `DeviceSimulator`、`Ocpp16Simulator` 和 `YunKuaiChongV150Simulator`，不会引入另一套协议客户端。
+
+手工模拟器默认保持同一条 TCP/WebSocket 连接：每次交易完成后连接器回到 `AVAILABLE`，设备仍保持 `ONLINE`，程序继续等待下一次 RemoteStart。OCPP 心跳采用 BootNotification 返回的周期，YKC 心跳默认每 30 秒发送一次；可用 `--heartbeat-interval-seconds=N` 覆盖。按 `Ctrl+C` 才会主动断开。临时只跑一笔时可设置 `--exit-after-cycle=true`。
+
+## Available simulator devices
+
+开发 seed 将数据展示设备与真实协议联调设备分开。`VB-DEMO-*` 用于 Console 列表、历史交易和账单展示；以下六台设备专门供独立 Simulator 通过真实 TCP/WebSocket 登录。它们各有 connector `1`，初始业务状态为 `ENABLED`、connector 状态为 `AVAILABLE`，seed 不创建命令、交易或 ONLINE 状态。启动并成功登录后，在线状态才会由设备连接更新。
+
+| Protocol | Device code | Connector | Endpoint |
+|---|---|---:|---|
+| OCPP 1.6J | `OCPP-SIM-001` | 1 | WebSocket `127.0.0.1:9100/ocpp` |
+| OCPP 1.6J | `OCPP-SIM-002` | 1 | WebSocket `127.0.0.1:9100/ocpp` |
+| OCPP 1.6J | `OCPP-SIM-003` | 1 | WebSocket `127.0.0.1:9100/ocpp` |
+| YunKuaiChong V1.5 | `20231212000010` | 1 | TCP `127.0.0.1:9000` |
+| YunKuaiChong V1.5 | `20231212000011` | 1 | TCP `127.0.0.1:9000` |
+| YunKuaiChong V1.5 | `20231212000012` | 1 | TCP `127.0.0.1:9000` |
+
+先从仓库根目录构建模拟器，再在每个独立 PowerShell 终端切换到 JAR 所在目录。启动第二台时另开一个终端；OCPP 的 `001` 与 `002`、以及 YKC 的 `...10` 与 `...11` 已纳入并行连接测试。
+
+```powershell
+.\mvnw.cmd -pl voltbridge-testing -am -Psimulator package -DskipTests
+Set-Location .\voltbridge-testing\target
+```
+
+OCPP 示例（每台设备各开一个终端）：
+
+```powershell
+java -jar .\voltbridge-device-simulator.jar `
+  --protocol=ocpp `
+  --host=127.0.0.1 `
+  --port=9100 `
+  --device=OCPP-SIM-001 `
+  --connector=1 `
+  --remote-stop=true
+```
+
+```powershell
+java -jar .\voltbridge-device-simulator.jar `
+  --protocol=ocpp `
+  --host=127.0.0.1 `
+  --port=9100 `
+  --device=OCPP-SIM-002 `
+  --connector=1 `
+  --remote-stop=true
+```
+
+YunKuaiChong V1.5 示例（每台设备各开一个终端）：
+
+```powershell
+java -jar .\voltbridge-device-simulator.jar `
+  --protocol=ykc `
+  --host=127.0.0.1 `
+  --port=9000 `
+  --device=20231212000010 `
+  --connector=1 `
+  --remote-stop=true
+```
+
+```powershell
+java -jar .\voltbridge-device-simulator.jar `
+  --protocol=ykc `
+  --host=127.0.0.1 `
+  --port=9000 `
+  --device=20231212000011 `
+  --connector=1 `
+  --remote-stop=true
+```
+
+`OCPP-SIM-003` 和 `20231212000012` 可通过相同命令分别替换 `--device` 值启动。以上命令要求对应协议 Gateway 正在监听示例地址；`Ctrl+C` 关闭模拟设备。
+
+## Console 手工测试：OCPP
+
+1. 启动本地 VoltBridge 和 PostgreSQL，并按本地开发流程应用开发 seed。确认 WebSocket OCPP 监听 `127.0.0.1:9100/ocpp`。
+2. 确认设备 `VB-DEMO-006` 已存在、协议为 OCPP 1.6J、连接器 `01` 已登记。dev seed 会让该连接器没有 `STARTING`、`CHARGING` 或 `ENDING` 交易，用于手工启动测试。
+3. 在另一个终端启动设备模拟器：
+
+   ```powershell
+   java -jar .\voltbridge-testing\target\voltbridge-device-simulator.jar `
+     --protocol=ocpp --host=127.0.0.1 --port=9100 `
+     --device=VB-DEMO-006 --connector=1 --remote-stop=true
+   ```
+
+4. 等待输出 `Device online and connector ready`，并在 VoltBridge Console 确认该设备在线。每笔交易完成后控制台会显示 `Device remains online` 并等待下一次 RemoteStart。
+5. 在 Console 对 `VB-DEMO-006` 的连接器 `01` 发起启动。模拟器会接收 RemoteStartTransaction、回报 StartTransaction 并发送 MeterValues。
+6. 模拟器输出进度并等待 RemoteStop。在 Console 对同一连接器停止充电；模拟器完成 StopTransaction，VoltBridge 应收敛交易并生成账单。
+
+自然完成流程可去掉 `--remote-stop=true`；模拟器会按设定的真实时长发送结束帧。测试 YunKuaiChong V1.5 over TCP 时使用 `--protocol=ykc --port=9000 --device=20231212000010`，并确认设备已按 YKC 协议登记。
+
+常用可选参数还有 `--real-duration-seconds`、`--simulated-duration-minutes` 和 `--progress-interval-seconds`。默认 OCPP 目标为 `127.0.0.1:9100`，默认 YKC 目标端口为 `9000`；`--host`、`--port` 可指向其他本机或开发环境地址。

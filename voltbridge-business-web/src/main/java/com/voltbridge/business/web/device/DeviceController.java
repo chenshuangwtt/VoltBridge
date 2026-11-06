@@ -4,8 +4,15 @@ import com.voltbridge.business.application.charging.StartChargingUseCase;
 import com.voltbridge.business.application.charging.StopChargingUseCase;
 import com.voltbridge.business.application.device.FindChargingDeviceUseCase;
 import com.voltbridge.business.application.device.DeviceOperationCommandUseCase;
+import com.voltbridge.business.application.device.DeviceOperationPreconditions;
+import com.voltbridge.business.application.device.FindDeviceOperationCapabilitiesUseCase;
 import com.voltbridge.business.domain.device.ChargingDevice;
+import com.voltbridge.business.domain.device.DeviceBusinessStatus;
 import com.voltbridge.common.result.ApiResponse;
+import com.voltbridge.device.model.ConnectorStatus;
+import com.voltbridge.device.model.DeviceOnlineStatus;
+import com.voltbridge.device.model.DeviceOperationCapabilities;
+import com.voltbridge.device.runtime.ConnectorRuntimeState;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -25,6 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /** 设备查询及远程启停命令的 REST 输入适配器，不承载业务规则。 */
@@ -42,26 +50,34 @@ public class DeviceController {
     private final StartChargingUseCase startCharging;
     private final StopChargingUseCase stopCharging;
     private final DeviceOperationCommandUseCase operations;
+    private final DeviceOperationPreconditions operationPreconditions;
+    private final FindDeviceOperationCapabilitiesUseCase findCapabilities;
 
     @org.springframework.beans.factory.annotation.Autowired
     public DeviceController(FindChargingDeviceUseCase findDevice, StartChargingUseCase startCharging,
-                            StopChargingUseCase stopCharging, DeviceOperationCommandUseCase operations) {
+                            StopChargingUseCase stopCharging, DeviceOperationCommandUseCase operations,
+                            DeviceOperationPreconditions operationPreconditions,
+                            FindDeviceOperationCapabilitiesUseCase findCapabilities) {
         this.findDevice = findDevice;
         this.startCharging = startCharging;
         this.stopCharging = stopCharging;
         this.operations = operations;
-    }
-
-    /** 保留现有 API 集成测试的构造方式；生产控制器使用完整依赖构造器。 */
-    public DeviceController(FindChargingDeviceUseCase findDevice, StartChargingUseCase startCharging,
-                            StopChargingUseCase stopCharging) {
-        this(findDevice, startCharging, stopCharging, null);
+        this.operationPreconditions = operationPreconditions;
+        this.findCapabilities = findCapabilities;
     }
 
     @GetMapping("/{deviceCode}")
-    @Operation(summary = "Get a device", description = "Returns the registered device and its protocol configuration.")
+    @Operation(summary = "Get a device", description = "Returns stable business status separately from live device and connector runtime state.")
     public ApiResponse<DeviceView> find(@PathVariable String deviceCode) {
-        return ApiResponse.success(DeviceView.from(findDevice.execute(deviceCode)));
+        ChargingDevice device = findDevice.execute(deviceCode);
+        DeviceOnlineStatus onlineStatus = operationPreconditions.onlineStatus(device);
+        Instant lastSeenAt = operationPreconditions.runtimeState(device)
+                .map(state -> state.lastSeenAt()).orElse(null);
+        List<ConnectorRuntimeView> connectors = operationPreconditions.connectorRuntimeStates(device).stream()
+                .map(ConnectorRuntimeView::from)
+                .toList();
+        DeviceOperationCapabilities capabilities = findCapabilities.execute(device.protocol());
+        return ApiResponse.success(DeviceView.from(device, onlineStatus, lastSeenAt, connectors, capabilities));
     }
 
     @PostMapping("/{deviceCode}/commands/start-charging")
@@ -137,11 +153,37 @@ public class DeviceController {
 
     @Schema(description = "Platform device representation")
     public record DeviceView(UUID id, UUID tenantId, UUID stationId, String deviceCode,
-                             String deviceName, String protocol, String protocolVersion, String status) {
+                             String deviceName, String protocol, String protocolVersion,
+                             DeviceBusinessStatus businessStatus, DeviceOnlineStatus onlineStatus,
+                             Instant lastSeenAt, List<ConnectorRuntimeView> connectors,
+                             DeviceOperationCapabilitiesView capabilities) {
 
-        private static DeviceView from(ChargingDevice device) {
+        private static DeviceView from(ChargingDevice device, DeviceOnlineStatus onlineStatus,
+                                       Instant lastSeenAt, List<ConnectorRuntimeView> connectors,
+                                       DeviceOperationCapabilities capabilities) {
             return new DeviceView(device.id(), device.tenantId(), device.stationId(), device.deviceCode(),
-                    device.deviceName(), device.protocol().name(), device.protocolVersion(), device.status());
+                    device.deviceName(), device.protocol().name(), device.protocolVersion(), device.businessStatus(),
+                    onlineStatus, lastSeenAt, connectors, DeviceOperationCapabilitiesView.from(capabilities));
+        }
+    }
+
+    @Schema(description = "Operations implemented by the device protocol")
+    public record DeviceOperationCapabilitiesView(boolean startCharging, boolean stopCharging,
+                                                  boolean timeSync, boolean reset) {
+
+        private static DeviceOperationCapabilitiesView from(DeviceOperationCapabilities capabilities) {
+            return new DeviceOperationCapabilitiesView(capabilities.startCharging(), capabilities.stopCharging(),
+                    capabilities.timeSync(), capabilities.reset());
+        }
+    }
+
+    @Schema(description = "Latest reported runtime state for a connector")
+    public record ConnectorRuntimeView(int connectorNo, ConnectorStatus runtimeStatus,
+                                       Instant changedAt, Instant lastReportedAt) {
+
+        private static ConnectorRuntimeView from(ConnectorRuntimeState state) {
+            return new ConnectorRuntimeView(state.connectorNo(), state.status(),
+                    state.changedAt(), state.lastReportedAt());
         }
     }
 }

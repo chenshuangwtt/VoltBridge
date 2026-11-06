@@ -2,6 +2,7 @@ package com.voltbridge.bootstrap;
 
 import com.voltbridge.business.application.charging.StartChargingUseCase;
 import com.voltbridge.business.application.charging.StopChargingUseCase;
+import com.voltbridge.business.application.device.DeviceOperationPreconditions;
 import com.voltbridge.business.domain.command.DeviceCommand;
 import com.voltbridge.business.domain.command.DeviceCommandRepository;
 import com.voltbridge.business.domain.connector.Connector;
@@ -15,6 +16,9 @@ import com.voltbridge.device.command.StartChargingCommand;
 import com.voltbridge.device.command.StopChargingCommand;
 import com.voltbridge.device.model.DeviceId;
 import com.voltbridge.device.model.DeviceProtocol;
+import com.voltbridge.device.model.ConnectorStatus;
+import com.voltbridge.infra.cache.CaffeineConnectorRuntimeStateStore;
+import com.voltbridge.infra.cache.CaffeineDeviceRuntimeStateStore;
 import com.voltbridge.gateway.command.DeviceCommandDispatcher;
 import com.voltbridge.gateway.protocol.ProtocolRegistry;
 import com.voltbridge.gateway.routing.DeviceRoute;
@@ -61,7 +65,7 @@ class MultiProtocolCommandArchitectureTest {
         Fixture fixture = fixture(protocol);
         StartChargingUseCase useCase = new StartChargingUseCase(fixture.deviceRepository,
                 fixture.connectorRepository, fixture.commandRepository, fixture.transactionRepository,
-                fixture.dispatcher, fixture.timeProvider, Duration.ofSeconds(30));
+                fixture.operationPreconditions, fixture.dispatcher, fixture.timeProvider, Duration.ofSeconds(30));
 
         useCase.execute(fixture.device.deviceCode(), "1", new BigDecimal("50.00"),
                 "1234567890123456", "1234567890123456", "ORDER-START");
@@ -82,7 +86,8 @@ class MultiProtocolCommandArchitectureTest {
         when(fixture.transactionRepository.findActiveByDeviceAndConnector(
                 fixture.device.id(), fixture.connector.id())).thenReturn(Optional.of(transaction));
         StopChargingUseCase useCase = new StopChargingUseCase(fixture.deviceRepository,
-                fixture.connectorRepository, fixture.transactionRepository, fixture.commandRepository,
+                fixture.connectorRepository, fixture.transactionRepository, fixture.operationPreconditions,
+                fixture.commandRepository,
                 fixture.dispatcher, fixture.timeProvider, Duration.ofSeconds(30));
 
         useCase.execute(fixture.device.deviceCode(), "1");
@@ -97,7 +102,7 @@ class MultiProtocolCommandArchitectureTest {
         ChargingDevice device = new ChargingDevice(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 protocol == DeviceProtocol.OCPP_16 ? "OCPP-CP-001" : "20231212000010",
                 "Test charger", protocol, protocol == DeviceProtocol.OCPP_16 ? "1.6J" : "1.5",
-                "ENABLED", NOW, NOW, 0);
+                com.voltbridge.business.domain.device.DeviceBusinessStatus.ENABLED, NOW, NOW, 0);
         Connector connector = new Connector(UUID.randomUUID(), device.tenantId(), device.stationId(),
                 device.id(), 1, "01", "DC", new BigDecimal("120"), "AVAILABLE", NOW, NOW);
 
@@ -107,6 +112,12 @@ class MultiProtocolCommandArchitectureTest {
         ChargingTransactionRepository transactionRepository = mock(ChargingTransactionRepository.class);
         when(deviceRepository.findByDeviceCode(device.deviceCode())).thenReturn(Optional.of(device));
         when(connectorRepository.findByDeviceIdAndConnectorNo(device.id(), 1)).thenReturn(Optional.of(connector));
+        CaffeineDeviceRuntimeStateStore deviceRuntimeStates = new CaffeineDeviceRuntimeStateStore();
+        deviceRuntimeStates.markOnline(new DeviceId(device.deviceCode()), "architecture-test", NOW);
+        CaffeineConnectorRuntimeStateStore connectorRuntimeStates = new CaffeineConnectorRuntimeStateStore();
+        connectorRuntimeStates.updateStatus(new DeviceId(device.deviceCode()), 1, ConnectorStatus.AVAILABLE, NOW);
+        DeviceOperationPreconditions operationPreconditions = new DeviceOperationPreconditions(
+                deviceRuntimeStates, connectorRuntimeStates);
 
         AtomicReference<DeviceCommand> storedCommand = new AtomicReference<>();
         org.mockito.Mockito.doAnswer(invocation -> {
@@ -153,13 +164,15 @@ class MultiProtocolCommandArchitectureTest {
                 new DeviceRouter(routeDirectory, timeProvider), sessionRegistry, protocolRegistry);
 
         return new Fixture(timeProvider, device, connector, deviceRepository, connectorRepository,
-                commandRepository, transactionRepository, dispatcher, selectedAdapter, transportSession);
+                commandRepository, transactionRepository, operationPreconditions, dispatcher,
+                selectedAdapter, transportSession);
     }
 
     private record Fixture(TimeProvider timeProvider, ChargingDevice device, Connector connector,
                            ChargingDeviceRepository deviceRepository, ConnectorRepository connectorRepository,
                            DeviceCommandRepository commandRepository,
                            ChargingTransactionRepository transactionRepository,
+                           DeviceOperationPreconditions operationPreconditions,
                            DeviceCommandDispatcher dispatcher, ProtocolAdapter selectedAdapter,
                            TransportSession transportSession) {
     }

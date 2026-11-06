@@ -2,6 +2,7 @@ package com.voltbridge.protocol.yunkuaichong;
 
 import com.voltbridge.device.command.DeviceCommand;
 import com.voltbridge.device.model.DeviceProtocol;
+import com.voltbridge.device.model.DeviceOperationCapabilities;
 import com.voltbridge.protocol.common.ProtocolContext;
 import com.voltbridge.protocol.common.spi.ProtocolAdapter;
 import com.voltbridge.protocol.common.spi.ProtocolInboundResult;
@@ -47,6 +48,11 @@ public class YunKuaiChongProtocolAdapter implements ProtocolAdapter {
     @Override
     public DeviceProtocol protocol() {
         return DeviceProtocol.YUN_KUAI_CHONG_150;
+    }
+
+    @Override
+    public DeviceOperationCapabilities operationCapabilities() {
+        return new DeviceOperationCapabilities(true, true, true, true);
     }
 
     @Override

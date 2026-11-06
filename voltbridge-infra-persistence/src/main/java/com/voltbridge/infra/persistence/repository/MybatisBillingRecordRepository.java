@@ -10,7 +10,6 @@ import com.voltbridge.infra.persistence.entity.BillingLineItemEntity;
 import com.voltbridge.infra.persistence.entity.BillingRecordEntity;
 import com.voltbridge.infra.persistence.mapper.BillingLineItemMapper;
 import com.voltbridge.infra.persistence.mapper.BillingRecordMapper;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,15 +33,19 @@ public class MybatisBillingRecordRepository implements BillingRecordRepository {
         return Optional.ofNullable(records.selectOne(new QueryWrapper<BillingRecordEntity>().eq("transaction_id", transactionId))).map(this::domain);
     }
 
+    @Override public boolean existsByTariffPlanId(UUID tariffPlanId) {
+        return records.selectCount(new QueryWrapper<BillingRecordEntity>().eq("tariff_plan_id", tariffPlanId)) > 0;
+    }
+
     @Override
     @Transactional
     public BillingRecord saveIfAbsent(BillingRecord bill) {
         BillingRecord existing = findByTransactionId(bill.transactionId()).orElse(null);
         if (existing != null) return existing;
-        try {
-            records.insert(entity(bill));
-        } catch (DuplicateKeyException duplicate) {
-            return findByTransactionId(bill.transactionId()).orElseThrow(() -> duplicate);
+        if (records.insertIfAbsent(entity(bill)) == 0) {
+            // ON CONFLICT avoids aborting the PostgreSQL transaction under a concurrent billing race.
+            return findByTransactionId(bill.transactionId()).orElseThrow(() ->
+                    new IllegalStateException("Billing record conflict had no committed winner"));
         }
         for (int index = 0; index < bill.lineItems().size(); index++) {
             BillingLineItem item = bill.lineItems().get(index);

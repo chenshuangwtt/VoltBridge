@@ -38,6 +38,7 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -52,8 +53,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 final class FullDistributedE2ETest {
     static { System.setProperty("api.version", "1.41"); }
     private static final String YKC = "20231212000010";
+    private static final String YKC_SECOND = "20231212000011";
+    private static final String YKC_THIRD = "20231212000012";
     private static final String OCPP = "OCPP-SIM-001";
+    private static final String OCPP_SECOND = "OCPP-SIM-002";
+    private static final String OCPP_THIRD = "OCPP-SIM-003";
     private static final String TENANT = "11111111-1111-4111-8111-111111111111";
+    private static final String FALLBACK_TENANT = "12111111-1111-4111-8111-111111111111";
+    private static final String FALLBACK_STATION = "23222222-2222-4222-8222-222222222222";
+    private static final String FALLBACK_PLAN = "45444444-4444-4444-8444-444444444444";
+    private static final String FALLBACK_FAMILY = "45444444-4444-4444-8444-444444444445";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
 
@@ -163,6 +172,72 @@ final class FullDistributedE2ETest {
         }
     }
 
+    @Test @Order(4) void multipleOcppAndYunKuaiChongDevicesKeepIndependentGatewayBRoutes() throws Exception {
+        List<String> devices = List.of(YKC, YKC_SECOND, OCPP, OCPP_SECOND);
+        try (YunKuaiChongV150Simulator ykcOne = new YunKuaiChongV150Simulator("127.0.0.1", gatewayBTcp, YKC, 1);
+             YunKuaiChongV150Simulator ykcTwo = new YunKuaiChongV150Simulator("127.0.0.1", gatewayBTcp, YKC_SECOND, 1);
+             Ocpp16Simulator ocppOne = new Ocpp16Simulator("127.0.0.1", gatewayBWs, "/ocpp", OCPP, 1);
+             Ocpp16Simulator ocppTwo = new Ocpp16Simulator("127.0.0.1", gatewayBWs, "/ocpp", OCPP_SECOND, 1)) {
+            ykcOne.connect();
+            ykcOne.loginOrBoot();
+            ykcOne.heartbeat();
+            ykcOne.connectorReady();
+            ykcTwo.connect();
+            ykcTwo.loginOrBoot();
+            ykcTwo.heartbeat();
+            ykcTwo.connectorReady();
+            ocppOne.connect();
+            ocppOne.loginOrBoot();
+            ocppOne.heartbeat();
+            ocppOne.connectorReady();
+            ocppTwo.connect();
+            ocppTwo.loginOrBoot();
+            ocppTwo.heartbeat();
+            ocppTwo.connectorReady();
+
+            await("four independent simulator sessions on Gateway B", Duration.ofSeconds(15), () -> {
+                try {
+                    return devices.stream().allMatch(device -> {
+                        try {
+                            return "gateway-b".equals(redisField(device, "gatewayNodeId"))
+                                    && "ONLINE".equals(call("GET", "/api/devices/" + device, null)
+                                            .path("data").path("onlineStatus").asText());
+                        } catch (Exception ignored) {
+                            return false;
+                        }
+                    });
+                } catch (Exception ignored) {
+                    return false;
+                }
+            });
+
+            List<String> sessions = new ArrayList<>();
+            for (String device : devices) {
+                assertThat(redisField(device, "gatewayNodeId")).isEqualTo("gateway-b");
+                sessions.add(redisField(device, "sessionId"));
+            }
+            assertThat(new HashSet<>(sessions)).hasSize(devices.size());
+            assertThat(sessions).allMatch(session -> !session.isBlank());
+        }
+    }
+
+    @Test @Order(5) void tenantWithoutScheduledTariffBillsUsingConcreteFallbackRevision() throws Exception {
+        HttpControl control = new HttpControl(YKC_THIRD);
+        ChargingScenarioConfig config = config("distributed-fallback", YKC_THIRD, CompletionMode.REMOTE_STOP);
+        try (YunKuaiChongV150Simulator simulator = new YunKuaiChongV150Simulator("127.0.0.1", gatewayBTcp, YKC_THIRD, 1)) {
+            var result = new ChargingScenarioRunner().runRemoteStartScenario(simulator, config, control);
+            assertThat(result.finalStatus()).isEqualTo("COMPLETED");
+            JsonNode bill = call("GET", "/api/billing-records/by-transaction/" + result.chargingTransactionId(), null)
+                    .path("data");
+            assertThat(bill.path("totalAmount").decimalValue()).isEqualByComparingTo("6.00");
+            assertThat(bill.path("tariffPlanId").asText()).isEqualTo(FALLBACK_PLAN);
+            JsonNode snapshot = JSON.readTree(bill.path("pricingSnapshot").asText());
+            assertThat(snapshot.path("role").asText()).isEqualTo("FALLBACK");
+            assertThat(snapshot.path("familyId").asText()).isEqualTo(FALLBACK_FAMILY);
+            assertThat(snapshot.path("revision").asInt()).isEqualTo(1);
+        }
+    }
+
     private static void startGateway(Path root, String redis, String node, int grpc, int tcp, int ws, int businessGrpcPort) throws Exception {
         PROCESSES.add(start(root, "voltbridge-gateway-bootstrap", "com.voltbridge.gateway.bootstrap.VoltBridgeGatewayApplication",
                 env("GATEWAY_NODE_ID", node, "GATEWAY_GRPC_PORT", grpc, "GATEWAY_GRPC_ADVERTISED_PORT", grpc,
@@ -192,16 +267,34 @@ final class FullDistributedE2ETest {
         try (Connection c = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              Statement s = c.createStatement()) {
             s.execute("insert into tenant(id,tenant_code,tenant_name,status) values ('" + TENANT + "','E2E','E2E','ACTIVE')");
+            s.execute("insert into tenant(id,tenant_code,tenant_name,status) values ('" + FALLBACK_TENANT + "','E2E-FALLBACK','E2E fallback only','ACTIVE')");
             s.execute("insert into charging_station(id,tenant_id,station_code,station_name,status) values ('22222222-2222-4222-8222-222222222222','" + TENANT + "','E2E','E2E','ACTIVE')");
-            seedDevice(s, "33333333-3333-4333-8333-333333333331", YKC, "YUN_KUAI_CHONG_150", "YKC 1.5");
-            seedDevice(s, "33333333-3333-4333-8333-333333333332", OCPP, "OCPP_16", "1.6J");
-            s.execute("insert into tariff_plan(id,tenant_id,name,currency,pricing_type,energy_price_per_kwh,service_fee_per_kwh,effective_from,status,activated_at) values ('44444444-4444-4444-8444-444444444444','" + TENANT + "','E2E fixed tariff','CNY','FIXED',1.000000,0.200000,'2020-01-01T00:00:00Z','ACTIVE',now())");
+            s.execute("insert into charging_station(id,tenant_id,station_code,station_name,status) values ('" + FALLBACK_STATION + "','" + FALLBACK_TENANT + "','E2E-FALLBACK','E2E fallback only','ACTIVE')");
+            seedDevice(s, "33333333-3333-4333-8333-333333333331", TENANT, "22222222-2222-4222-8222-222222222222", YKC, "YUN_KUAI_CHONG_150", "YKC 1.5");
+            seedDevice(s, "33333333-3333-4333-8333-333333333332", TENANT, "22222222-2222-4222-8222-222222222222", OCPP, "OCPP_16", "1.6J");
+            seedDevice(s, "33333333-3333-4333-8333-333333333333", TENANT, "22222222-2222-4222-8222-222222222222", YKC_SECOND, "YUN_KUAI_CHONG_150", "YKC 1.5");
+            seedDevice(s, "33333333-3333-4333-8333-333333333334", FALLBACK_TENANT, FALLBACK_STATION, YKC_THIRD, "YUN_KUAI_CHONG_150", "YKC 1.5");
+            seedDevice(s, "33333333-3333-4333-8333-333333333335", TENANT, "22222222-2222-4222-8222-222222222222", OCPP_SECOND, "OCPP_16", "1.6J");
+            seedDevice(s, "33333333-3333-4333-8333-333333333336", TENANT, "22222222-2222-4222-8222-222222222222", OCPP_THIRD, "OCPP_16", "1.6J");
+            s.execute("insert into tariff_plan(id,family_id,revision,tenant_id,role,name,currency,pricing_type,timezone,effective_from,status,activated_at) "
+                    + "values ('44444444-4444-4444-8444-444444444444','44444444-4444-4444-8444-444444444444',1,'" + TENANT
+                    + "','SCHEDULED','E2E fixed tariff','CNY','FIXED','Asia/Shanghai','2020-01-01T00:00:00Z','ACTIVE',now())");
+            s.execute("insert into tariff_period(tariff_plan_id,sequence_no,period_type,start_minute,end_minute,energy_price_per_kwh,service_fee_per_kwh) "
+                    + "values ('44444444-4444-4444-8444-444444444444',1,'FLAT',0,1440,1.000000,0.200000)");
+            s.execute("insert into tariff_plan(id,family_id,revision,tenant_id,role,name,currency,pricing_type,timezone,effective_from,status,activated_at) "
+                    + "values ('" + FALLBACK_PLAN + "','" + FALLBACK_FAMILY + "',1,'" + FALLBACK_TENANT
+                    + "','FALLBACK','默认固定资费','CNY','FIXED','Asia/Shanghai','2020-01-01T00:00:00Z','ACTIVE',now())");
+            s.execute("insert into tariff_period(tariff_plan_id,sequence_no,period_type,start_minute,end_minute,energy_price_per_kwh,service_fee_per_kwh) "
+                    + "values ('" + FALLBACK_PLAN + "',1,'FLAT',0,1440,1.000000,0.200000)");
+            s.execute("insert into tariff_revision_counter(family_id,last_revision) values "
+                    + "('44444444-4444-4444-8444-444444444444',1),('" + FALLBACK_FAMILY + "',1)");
         }
     }
 
-    private static void seedDevice(Statement s, String id, String code, String protocol, String version) throws Exception {
-        s.execute("insert into charging_device(id,tenant_id,station_id,device_code,device_name,protocol,protocol_version,status) values ('" + id + "','" + TENANT + "','22222222-2222-4222-8222-222222222222','" + code + "','E2E','" + protocol + "','" + version + "','REGISTERED')");
-        s.execute("insert into charging_connector(id,tenant_id,station_id,device_id,connector_no,connector_code,connector_type,rated_power,status) values ('" + UUID.randomUUID() + "','" + TENANT + "','22222222-2222-4222-8222-222222222222','" + id + "',1,'" + code + "-1','DC',120,'AVAILABLE')");
+    private static void seedDevice(Statement s, String id, String tenant, String station,
+                                   String code, String protocol, String version) throws Exception {
+        s.execute("insert into charging_device(id,tenant_id,station_id,device_code,device_name,protocol,protocol_version,business_status) values ('" + id + "','" + tenant + "','" + station + "','" + code + "','E2E','" + protocol + "','" + version + "','ENABLED')");
+        s.execute("insert into charging_connector(id,tenant_id,station_id,device_id,connector_no,connector_code,connector_type,rated_power,status) values ('" + UUID.randomUUID() + "','" + tenant + "','" + station + "','" + id + "',1,'" + code + "-1','DC',120,'AVAILABLE')");
     }
 
     private static ChargingScenarioConfig config(String name, String device, CompletionMode mode) {
@@ -281,6 +374,14 @@ final class FullDistributedE2ETest {
         HttpControl(String device) { this.device = device; }
         @Override public UUID requestRemoteStart() {
             try {
+                await("Business ONLINE state for " + device, Duration.ofSeconds(10), () -> {
+                    try {
+                        return "ONLINE".equals(call("GET", "/api/devices/" + device, null)
+                                .path("data").path("onlineStatus").asText());
+                    } catch (Exception ignored) {
+                        return false;
+                    }
+                });
                 JsonNode node = call("POST", "/api/devices/" + device + "/commands/start-charging", "{\"connectorNo\":\"1\",\"limitAmount\":50.00,\"logicalCardNo\":\"1234567890123456\",\"physicalCardNo\":\"1234567890123456\",\"businessRef\":\"E2E-" + device + "\"}");
                 if (!"gateway-b".equals(redisField(device, "gatewayNodeId"))) {
                     throw new IllegalStateException("Remote start was not routed through Gateway B for " + device);

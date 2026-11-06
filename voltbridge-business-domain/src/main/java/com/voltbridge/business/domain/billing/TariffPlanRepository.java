@@ -10,5 +10,11 @@ public interface TariffPlanRepository {
     void save(TariffPlan tariffPlan);
     Optional<TariffPlan> findById(UUID id);
     List<TariffPlan> findByTenantId(UUID tenantId);
-    Optional<TariffPlan> findEffectiveActive(UUID tenantId, Instant effectiveAt);
+    List<TariffPlan> findEffectiveAt(UUID tenantId, TariffRole role, Instant effectiveAt);
+    List<TariffPlan> findActiveOverlapping(UUID tenantId, Instant effectiveFrom, Instant effectiveTo,
+                                           UUID excludingPlanId);
+    void lockTenantForTariffLifecycle(UUID tenantId);
+    void lockFamilyForRevision(UUID familyId);
+    int nextRevision(UUID familyId);
+    boolean delete(UUID id);
 }

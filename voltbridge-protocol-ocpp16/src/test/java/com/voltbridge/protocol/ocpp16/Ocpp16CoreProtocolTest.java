@@ -6,6 +6,7 @@ import com.voltbridge.device.command.StartChargingCommand;
 import com.voltbridge.device.event.ChargingProgressEvent;
 import com.voltbridge.device.event.CommandResultEvent;
 import com.voltbridge.device.model.DeviceId;
+import com.voltbridge.device.model.DeviceOperationCapabilities;
 import com.voltbridge.device.model.DeviceProtocol;
 import com.voltbridge.protocol.common.ProtocolContext;
 import com.voltbridge.protocol.ocpp16.action.MeterValuesHandler;
@@ -104,6 +105,18 @@ class Ocpp16CoreProtocolTest {
 
         timeProvider.now = timeProvider.now.plusSeconds(11);
         assertThat(pending.size()).isZero();
+    }
+
+    @Test
+    void declaresOnlyImplementedOcppOperations() {
+        MutableTimeProvider timeProvider = new MutableTimeProvider(Instant.parse("2026-10-18T12:00:00Z"));
+        Ocpp16Properties properties = new Ocpp16Properties();
+        Ocpp16ProtocolAdapter adapter = new Ocpp16ProtocolAdapter(codec,
+                new Ocpp16ActionHandlerRegistry(List.of()),
+                new Ocpp16PendingRequestRegistry(timeProvider, properties), timeProvider);
+
+        assertThat(adapter.operationCapabilities()).isEqualTo(
+                new DeviceOperationCapabilities(true, true, false, false));
     }
 
     private ProtocolContext context() {

@@ -4,7 +4,7 @@ VoltBridge 当前适合以 **prototype / portfolio-grade backend** 公开发布�
 
 ## HIGH / ROADMAP
 
-- 数据库已由 Flyway V1 baseline 管理；由旧 `schema-init.sql` 建立的本地库需人工核对后显式 baseline。
+- 当前 V1 baseline 是正式初始化 schema；使用此前版本 V1 的本地开发库须按迁移指南删除并重新创建 `voltbridge` 数据库，不做旧 schema 自动兼容。
 - Full E2E profile 已实现 Business、两个 Gateway JVM、协议模拟器、Kafka 事件回流和账单闭环；A→B 同设备接管与 A stale disconnect 后 B 路由保留已覆盖。
 - Gateway 强制崩溃后的 TTL 自动恢复及 Redis outage/chaos 尚未自动化；跨节点 Kafka 顺序的额外边界仍需后续覆盖。
 

@@ -19,6 +19,17 @@ public final class ChargingScenarioRunner {
 
     public ScenarioResult runRemoteStartScenario(DeviceSimulator simulator, ChargingScenarioConfig config,
                                                  PlatformScenarioControl platform) throws Exception {
+        return runRemoteStartScenario(simulator, config, platform, true);
+    }
+
+    /**
+     * Runs one automated charging scenario, optionally leaving transport cleanup to the caller.
+     * This lets integration tests verify the device remains online after a completed transaction
+     * while the same simulator connection is still open.
+     */
+    public ScenarioResult runRemoteStartScenario(DeviceSimulator simulator, ChargingScenarioConfig config,
+                                                 PlatformScenarioControl platform,
+                                                 boolean disconnectAfterScenario) throws Exception {
         Instant startedAt = Instant.now();
         DeterministicChargingProfile profile = new DeterministicChargingProfile(config);
         List<ChargingSample> samples = profile.samples();
@@ -67,7 +78,7 @@ public final class ChargingScenarioRunner {
                     platform.chargingTransactionId(), "COMPLETED", samples.size(),
                     finalSample.stateOfCharge(), finalSample.energyKwh(), simulator.trace().entries());
         } finally {
-            simulator.disconnect();
+            if (disconnectAfterScenario) simulator.disconnect();
         }
     }
 

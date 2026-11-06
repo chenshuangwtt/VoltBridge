@@ -17,6 +17,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.Set;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** 使用 JDK WebSocket 客户端扮演 OCPP 1.6J Charge Point 的真实网络模拟器。 */
 public final class Ocpp16Simulator implements DeviceSimulator {
@@ -27,8 +30,10 @@ public final class Ocpp16Simulator implements DeviceSimulator {
     private final ScenarioTrace trace = new ScenarioTrace();
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final QueueingListener listener = new QueueingListener();
+    private final Set<String> heartbeatRequests = ConcurrentHashMap.newKeySet();
     private int messageSequence;
     private int transactionId;
+    private Duration heartbeatInterval = Duration.ofSeconds(60);
     private WebSocket socket;
     private JsonNode remoteStart;
     private JsonNode remoteStop;
@@ -57,6 +62,8 @@ public final class Ocpp16Simulator implements DeviceSimulator {
         JsonNode result = receive();
         requireResult(result, uniqueId, "BootNotification");
         if (!"Accepted".equals(result.get(2).path("status").asText())) throw new IllegalStateException("BootNotification rejected");
+        long intervalSeconds = result.get(2).path("interval").asLong(60);
+        if (intervalSeconds > 0) heartbeatInterval = Duration.ofSeconds(intervalSeconds);
         trace.add("BootNotification accepted: deviceCode=" + deviceCode);
     }
 
@@ -69,22 +76,44 @@ public final class Ocpp16Simulator implements DeviceSimulator {
     }
 
     @Override
+    public void sendHeartbeat() {
+        String uniqueId = nextId("heartbeat");
+        heartbeatRequests.add(uniqueId);
+        sendCall(uniqueId, "Heartbeat", "{}");
+        trace.add("Heartbeat sent");
+    }
+
+    @Override
+    public Duration heartbeatInterval() {
+        return heartbeatInterval;
+    }
+
+    @Override
     public void connectorReady() throws Exception {
         String uniqueId = nextId("ready");
         sendCall(uniqueId, "StatusNotification", "{\"connectorId\":" + connectorNo
-                + ",\"errorCode\":\"NoError\",\"status\":\"Preparing\"}");
-        requireResult(receive(), uniqueId, "StatusNotification Preparing");
+                + ",\"errorCode\":\"NoError\",\"status\":\"Available\"}");
+        requireResult(receive(), uniqueId, "StatusNotification Available");
         trace.add("Connector ready: connectorNo=" + connectorNo);
     }
 
     @Override
     public void awaitRemoteStart(Duration timeout) throws Exception {
-        remoteStart = receive(timeout);
+        if (!awaitRemoteStartIfAvailable(timeout)) {
+            throw new TimeoutException("Timed out waiting for OCPP RemoteStartTransaction");
+        }
+    }
+
+    @Override
+    public boolean awaitRemoteStartIfAvailable(Duration timeout) throws Exception {
+        remoteStart = receiveAvailable(timeout);
+        if (remoteStart == null) return false;
         requireCall(remoteStart, "RemoteStartTransaction");
         if (remoteStart.get(3).path("connectorId").asInt() != connectorNo) {
             throw new IllegalStateException("RemoteStart connector mismatch");
         }
         trace.add("RemoteStartTransaction received");
+        return true;
     }
 
     @Override
@@ -180,16 +209,36 @@ public final class Ocpp16Simulator implements DeviceSimulator {
         requireResult(receive(), uniqueId, "StatusNotification " + status);
     }
 
-    private String nextId(String type) { return "sim-" + type + '-' + (++messageSequence); }
+    private synchronized String nextId(String type) { return "sim-" + type + '-' + (++messageSequence); }
     private void sendCall(String uniqueId, String action, String payload) { send("[2,\"" + uniqueId + "\",\"" + action + "\"," + payload + "]"); }
     private void sendResult(String uniqueId, String payload) { send("[3,\"" + uniqueId + "\"," + payload + "]"); }
-    private void send(String message) { socket.sendText(message, true).join(); }
+    private synchronized void send(String message) { socket.sendText(message, true).join(); }
 
     private JsonNode receive() throws Exception { return receive(Duration.ofSeconds(5)); }
     private JsonNode receive(Duration timeout) throws Exception {
-        String message = listener.messages.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        JsonNode message = receiveAvailable(timeout);
         if (message == null) throw new IllegalStateException("Timed out waiting for OCPP server message; trace=" + trace.render());
-        return objectMapper.readTree(message);
+        return message;
+    }
+
+    private JsonNode receiveAvailable(Duration timeout) throws Exception {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (true) {
+            long remainingNanos = deadline - System.nanoTime();
+            if (remainingNanos <= 0) return null;
+            String message = listener.messages.poll(remainingNanos, TimeUnit.NANOSECONDS);
+            if (message == null) return null;
+            if (QueueingListener.CLOSED_MESSAGE.equals(message)) {
+                throw new java.io.EOFException("OCPP WebSocket closed by VoltBridge");
+            }
+            JsonNode parsed = objectMapper.readTree(message);
+            String uniqueId = parsed.path(1).asText();
+            if (parsed.path(0).asInt() == 3 && heartbeatRequests.remove(uniqueId)) {
+                trace.add("Heartbeat acknowledged: currentTime=" + parsed.path(2).path("currentTime").asText());
+                continue;
+            }
+            return parsed;
+        }
     }
 
     private void requireResult(JsonNode message, String uniqueId, String action) {
@@ -214,5 +263,14 @@ public final class Ocpp16Simulator implements DeviceSimulator {
             webSocket.request(1);
             return CompletableFuture.completedFuture(null);
         }
+        @Override public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+            messages.offer(CLOSED_MESSAGE);
+            return CompletableFuture.completedFuture(null);
+        }
+        @Override public void onError(WebSocket webSocket, Throwable error) {
+            messages.offer(CLOSED_MESSAGE);
+        }
+
+        private static final String CLOSED_MESSAGE = "__VOLTBRIDGE_WEBSOCKET_CLOSED__";
     }
 }
